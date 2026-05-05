@@ -11,7 +11,7 @@ from typing import Optional
 
 from contracts.models import Submission
 from storage import db
-from parser.file_parser import parse as parse_file
+from mvp_parser.file_parser import parse as parse_file
 
 
 # ── 文件存储根目录 ─────────────────────────────────────────

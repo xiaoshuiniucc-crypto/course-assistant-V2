@@ -1,4 +1,4 @@
-"""Backward-compatible shim for legacy parser imports."""
+"""Project file parser package."""
 
 from fileparser.file_parser import FileParser
 

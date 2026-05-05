@@ -26,7 +26,7 @@ from ta_channel.ta_channel import TAChannelManager
 from teacher_stats.stats import TeacherStats
 from report.report_gen import ReportGenerator
 from rubric.rubric_parser import RubricParser
-from parser.file_parser import FileParser
+from fileparser.file_parser import FileParser
 from homework.receiver import HomeworkReceiver
 from grading.engine import GradingEngine
 from notify.result_notifier import ResultNotifier
@@ -36,6 +36,11 @@ from appeal.handler import AppealHandler
 PASS = 0
 FAIL = 0
 LOG = []
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except AttributeError:
+    pass
 
 
 def log(section: str, ok: bool, detail: str = ""):

@@ -1,4 +1,4 @@
-"""Backward-compatible shim for MVP parser imports."""
+"""MVP file parser package."""
 
 from mvp_parser.file_parser import parse as parse_file
 

@@ -23,7 +23,7 @@ from homework.receiver import receive_file, get_submission_text
 from grading.engine import grade, LLMClient
 from notify.result_notifier import format_summary, print_result
 from appeal.handler import submit_appeal, trigger_regrade, resolve_appeal_interactive, get_appeal_summary
-from parser.file_parser import parse as parse_file
+from mvp_parser.file_parser import parse as parse_file
 
 
 # ── 示例评分细则文本 ────────────────────────────────────────
