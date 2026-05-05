@@ -1,13 +1,40 @@
 # 环境变量（含 API Key）
 .env
 
-# Python 缓存
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
 *.pyo
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# 数据库
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# Database
 *.db
+*.sqlite
+*.sqlite3
 
 # 测试产物
 test_reports/
@@ -16,3 +43,15 @@ test_report.log
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+mvp/src/data/submissions/*
+mvp/src/data/course_assistant.db
+!mvp/src/data/submissions/.gitkeep

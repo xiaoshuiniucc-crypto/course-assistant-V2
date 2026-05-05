@@ -1,0 +1,46 @@
+数据库第二次作业
+
+一、问题分析
+
+本次作业要求针对一个在线图书管理系统的数据库进行设计。通过分析，我识别出以下核心问题：
+
+1. 系统需要管理大量的图书信息，包括书名、作者、出版社、ISBN、分类等
+2. 用户可以借阅和归还图书，需要记录借阅历史
+3. 系统需要支持多用户并发访问，需要考虑数据一致性
+4. 需要实现图书检索功能，支持按书名、作者、分类等条件查询
+
+我认为核心问题是如何在保证数据一致性的前提下，设计出高效的数据库结构。
+
+二、方案设计
+
+基于上述分析，我设计了以下数据库方案：
+
+1. 图书表（Books）：存储图书基本信息
+   - book_id (PK), title, author, publisher, ISBN, category, stock_count
+
+2. 用户表（Users）：存储注册用户信息
+   - user_id (PK), name, email, phone, registration_date
+
+3. 借阅记录表（BorrowRecords）：记录借阅和归还
+   - record_id (PK), user_id (FK), book_id (FK), borrow_date, due_date, return_date
+
+4. 分类表（Categories）：图书分类
+   - category_id (PK), name, parent_id
+
+关系模式：
+- Users 与 BorrowRecords 是一对多关系
+- Books 与 BorrowRecords 是一对多关系
+- Categories 是自引用关系（parent_id）
+
+数据完整性约束：
+- 实体完整性：所有主键不为空
+- 参照完整性：外键必须引用已存在的记录
+- 用户定义完整性：stock_count >= 0
+
+三、表达规范
+
+本方案遵循数据库设计的标准流程，从需求分析到概念设计再到逻辑设计。采用了E-R模型进行概念结构设计，并将其转换为关系模式。
+
+参考文献：
+- 《数据库系统概论》第3章 数据库设计
+- 课件中关于约束条件的讨论
