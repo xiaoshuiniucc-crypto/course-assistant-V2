@@ -162,8 +162,9 @@ class GradingEngine:
     def _grade_with_ai(self, submission: HomeworkSubmission,
                        rubric: Rubric,
                        assignment_title: str,
-                       appeal_reason: str = "") -> GradingResult:
-        """使用 DeepSeek / OpenAI API 进行维度评分"""
+                       appeal_reason: str = "",
+                       max_retries: int = 2) -> GradingResult:
+        """使用 DeepSeek / OpenAI API 进行维度评分（含重试）"""
         dim_desc = "\n".join(
             f"- {d.name} (权重 {d.weight:.0%}): {d.description or '无描述'}"
             for d in rubric.dimensions
@@ -199,49 +200,123 @@ class GradingEngine:
   "confidence": 置信度(0-1)
 }}"""
 
-        try:
-            logger.info(f"调用 {self._provider} ({self.model}) 批改提交 {submission.id}...")
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "你是专业课程助教，严格按照评分标准批改作业。只输出JSON。"},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=1000,
-                timeout=self._timeout,
-            )
-            raw = resp.choices[0].message.content.strip()
-            logger.debug(f"LLM 原始响应: {raw[:200]}")
-            # 提取 JSON
-            match = re.search(r'\{[\s\S]*\}', raw)
-            if match:
-                data = json.loads(match.group())
-                dim_scores = {
-                    str(k): float(v)
-                    for k, v in data.get("dimension_scores", {}).items()
-                }
-                # 确保每个维度都有分数
-                for d in rubric.dimensions:
-                    if d.name not in dim_scores:
-                        dim_scores[d.name] = 70.0  # 默认
-                result = GradingResult(
-                    submission_id=submission.id,
-                    dimension_scores=dim_scores,
-                    total_score=self._calc_weighted_score(dim_scores, rubric),
-                    feedback=data.get("feedback", ""),
-                    confidence=float(data.get("confidence", 0.7)),
-                    graded_by=f"ai:{self._provider}",
-                    graded_at=datetime.now(),
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                logger.info(
+                    f"调用 {self._provider} ({self.model}) 批改提交 {submission.id}"
+                    f"{' (重试 ' + str(attempt) + ')' if attempt > 0 else ''}..."
                 )
-                logger.info(f"AI 批改完成: {result.total_score}分 (置信度 {result.confidence})")
-                return result
-            else:
-                logger.warning(f"LLM 响应无法解析为 JSON: {raw[:100]}")
-        except Exception as e:
-            logger.warning(f"AI批改异常: {e}, fallback到规则评分")
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "你是专业课程助教，严格按照评分标准批改作业。只输出JSON。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=1000,
+                    timeout=self._timeout,
+                )
+                raw = resp.choices[0].message.content.strip()
+                logger.debug(f"LLM 原始响应: {raw[:200]}")
 
+                result = self._parse_ai_response(raw, submission, rubric)
+                if result:
+                    logger.info(
+                        f"AI 批改完成: {result.total_score}分 "
+                        f"(置信度 {result.confidence})"
+                    )
+                    return result
+
+                # JSON 解析失败
+                last_error = "LLM 响应无法解析为 JSON"
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(
+                    f"AI批改异常 (尝试 {attempt + 1}/{max_retries + 1}): {e}"
+                )
+
+        logger.warning(
+            f"AI批改全部失败 ({max_retries + 1}次): {last_error}, "
+            f"fallback到规则评分"
+        )
         return self._grade_with_rules(submission, rubric)
+
+    def _parse_ai_response(self, raw: str,
+                            submission: HomeworkSubmission,
+                            rubric: Rubric) -> Optional[GradingResult]:
+        """解析 AI 响应为 GradingResult（健壮版）
+
+        改进:
+        1. 多种 JSON 提取策略
+        2. 维度名模糊匹配（子串包含）
+        3. 缺失维度填充默认分
+        """
+        # 提取 JSON
+        match = re.search(r'\{[\s\S]*\}', raw)
+        if not match:
+            return None
+
+        try:
+            data = json.loads(match.group())
+        except json.JSONDecodeError:
+            # 尝试修复常见 JSON 问题：尾逗号、中文引号
+            fixed = match.group()
+            fixed = fixed.replace("，", ",")
+            fixed = re.sub(r',\s*}', '}', fixed)
+            fixed = re.sub(r',\s*]', ']', fixed)
+            try:
+                data = json.loads(fixed)
+            except json.JSONDecodeError:
+                return None
+
+        dim_scores_raw = data.get("dimension_scores", {})
+        if not isinstance(dim_scores_raw, dict):
+            return None
+
+        # 将字符串 key 统一，尝试数值转换
+        raw_scores: Dict[str, float] = {}
+        for k, v in dim_scores_raw.items():
+            try:
+                raw_scores[str(k)] = float(v)
+            except (ValueError, TypeError):
+                continue
+
+        # 维度名匹配：精确匹配 + 模糊匹配（子串包含）
+        dim_scores: Dict[str, float] = {}
+        for d in rubric.dimensions:
+            score = None
+            # 1. 精确匹配
+            if d.name in raw_scores:
+                score = raw_scores[d.name]
+            else:
+                # 2. 模糊匹配：AI 返回的 key 包含维度名，或维度名包含 key
+                for raw_key, raw_val in raw_scores.items():
+                    if d.name in raw_key or raw_key in d.name:
+                        score = raw_val
+                        break
+                    # 去除空格后匹配
+                    if d.name.replace(" ", "") in raw_key.replace(" ", ""):
+                        score = raw_val
+                        break
+
+            dim_scores[d.name] = round(score, 1) if score is not None else 70.0
+
+        try:
+            confidence = float(data.get("confidence", 0.7))
+        except (ValueError, TypeError):
+            confidence = 0.7
+
+        return GradingResult(
+            submission_id=submission.id,
+            dimension_scores=dim_scores,
+            total_score=self._calc_weighted_score(dim_scores, rubric),
+            feedback=str(data.get("feedback", "")),
+            confidence=confidence,
+            graded_by=f"ai:{self._provider}",
+            graded_at=datetime.now(),
+        )
 
     # ── 规则评分 fallback ─────────────────────
 

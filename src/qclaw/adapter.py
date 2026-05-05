@@ -149,9 +149,11 @@ class QclawAdapter:
         import botpy
 
         intents = botpy.Intents.none()
-        intents.public_guild_messages = True
-        intents.public_guild_messages = True   # 频道消息
+        intents.public_guild_messages = True       # 频道消息
+        intents.public_guild_messages = True       # 频道私信（同属 public_guild_messages intent）
         # 群聊和C2C需要在QQ开放平台申请权限后启用
+        # 申请到权限后取消注释以下行:
+        # intents.group_and_c2c_events = True       # 群聊@ + C2C私聊
 
         self._client = ClientClass(intents=intents)
 
@@ -173,7 +175,12 @@ class QclawAdapter:
         """停止 Bot"""
         self._running = False
         if self._client:
-            # botpy 没有优雅的 stop 方法，依赖 daemon 线程自动退出
+            try:
+                # botpy 1.x 没有官方 stop()，尝试关闭底层连接
+                if hasattr(self._client, '_http') and hasattr(self._client._http, 'session'):
+                    await self._client._http.session.close()
+            except Exception:
+                pass
             logger.info("Qclaw Bot 已停止")
 
     # ── 发送消息 ────────────────────────────
@@ -211,14 +218,38 @@ class QclawAdapter:
     # ── 文件操作 ────────────────────────────
 
     async def download_file(self, file_url: str,
-                            save_path: str) -> str:
-        """下载文件"""
+                            save_path: str,
+                            timeout: int = 60,
+                            max_size: int = 50 * 1024 * 1024) -> str:
+        """下载文件（带超时和大小限制）
+
+        Args:
+            file_url: 文件下载URL
+            save_path: 本地保存路径
+            timeout: 超时秒数（默认60）
+            max_size: 最大文件大小（默认50MB）
+        """
         import aiohttp
-        async with aiohttp.ClientSession() as session:
+        timeout_cfg = aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
             async with session.get(file_url) as resp:
                 if resp.status == 200:
+                    # 检查 Content-Length
+                    content_length = resp.content_length
+                    if content_length and content_length > max_size:
+                        raise IOError(
+                            f"文件过大: {content_length / 1024 / 1024:.1f}MB "
+                            f"(限制: {max_size / 1024 / 1024:.0f}MB)"
+                        )
+                    data = b""
+                    async for chunk in resp.content.iter_chunked(8192):
+                        data += chunk
+                        if len(data) > max_size:
+                            raise IOError(
+                                f"文件超过大小限制 ({max_size / 1024 / 1024:.0f}MB)"
+                            )
                     with open(save_path, "wb") as f:
-                        f.write(await resp.read())
+                        f.write(data)
                     return save_path
                 else:
                     raise IOError(f"下载失败: HTTP {resp.status}")
@@ -230,11 +261,45 @@ class QclawAdapter:
         """获取成员角色（TA/学生/教师）"""
         if self._client:
             try:
-                # QQ 开放平台 API 获取成员信息
-                # 具体 API 取决于权限等级
+                # QQ 开放平台 API 获取群成员信息
+                # botpy SDK: 通过 API 获取群成员角色
+                member_info = await self._client.api.get_group_member(
+                    group_openid=group_id,
+                    member_openid=user_id,
+                )
+                # 解析角色信息
+                # QQ群角色: owner(群主), admin(管理员), member(普通成员)
+                roles = []
+                if hasattr(member_info, 'role'):
+                    role_name = getattr(member_info, 'role', '')
+                    if isinstance(role_name, str):
+                        roles.append(role_name)
+                    elif isinstance(role_name, list):
+                        roles.extend(role_name)
+
+                # 映射到系统角色
+                # 群主/管理员 → teacher, 其余 → student
+                mapped = []
+                for r in roles:
+                    r_lower = r.lower() if isinstance(r, str) else ""
+                    if r_lower in ("owner", "admin", "群主", "管理员"):
+                        mapped.append("teacher")
+                    else:
+                        mapped.append("student")
+                return mapped or ["member"]
+            except Exception as e:
+                logger.warning(f"获取成员角色失败: {e}, 返回默认角色")
                 return ["member"]
-            except Exception:
-                return ["member"]
+
+        # Mock 模式: 从环境变量或配置中读取角色映射
+        # 格式: QQ_ROLE_MAP=user1:teacher,user2:ta,user3:student
+        role_map_str = os.environ.get("QQ_ROLE_MAP", "")
+        if role_map_str:
+            for entry in role_map_str.split(","):
+                if ":" in entry:
+                    uid, role = entry.strip().split(":", 1)
+                    if uid == user_id:
+                        return [role.strip()]
         return ["member"]
 
     # ── Mock 模式支持 ──────────────────────

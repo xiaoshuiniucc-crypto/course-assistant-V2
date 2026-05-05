@@ -1,17 +1,20 @@
 """
 SQLite 存储层
 提供所有模块的持久化能力
+支持 WAL 模式 + 线程安全写入
 """
 from __future__ import annotations
 import sqlite3
 import json
+import threading
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
 from contracts.models import (
     Courseware, Rubric, Assignment, HomeworkSubmission,
-    GradingResult, Appeal, RubricDimension, SubmitStatus
+    GradingResult, Appeal, RubricDimension, SubmitStatus,
+    ReportConfig, ReportEvidence, RadarData, ReportType
 )
 
 
@@ -20,7 +23,7 @@ def _now_iso() -> str:
 
 
 class DB:
-    """统一数据库访问层（SQLite）"""
+    """统一数据库访问层（SQLite），线程安全，WAL 模式"""
 
     SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS courseware (
@@ -114,12 +117,74 @@ class DB:
         updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS notify_queue (
+        id TEXT PRIMARY KEY,
+        target_id TEXT NOT NULL,
+        group_id TEXT,
+        content TEXT NOT NULL,
+        priority INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'pending',
+        retry_count INTEGER DEFAULT 0,
+        max_retries INTEGER DEFAULT 3,
+        created_at TEXT NOT NULL,
+        error_msg TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ta_actions (
+        id TEXT PRIMARY KEY,
+        appeal_id TEXT NOT NULL,
+        ta_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        note TEXT,
+        new_score REAL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (appeal_id) REFERENCES appeals(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_submissions_assignment
         ON submissions(assignment_id);
     CREATE INDEX IF NOT EXISTS idx_submissions_student
         ON submissions(student_id);
     CREATE INDEX IF NOT EXISTS idx_appeals_submission
         ON appeals(submission_id);
+    CREATE INDEX IF NOT EXISTS idx_ta_actions_appeal
+        ON ta_actions(appeal_id);
+    CREATE INDEX IF NOT EXISTS idx_ta_actions_ta
+        ON ta_actions(ta_id);
+    CREATE INDEX IF NOT EXISTS idx_notify_queue_status
+        ON notify_queue(status);
+
+    CREATE TABLE IF NOT EXISTS reports (
+        id TEXT PRIMARY KEY,
+        assignment_id TEXT NOT NULL,
+        report_type TEXT NOT NULL,
+        student_id TEXT,
+        file_path TEXT NOT NULL,
+        config TEXT NOT NULL,            -- JSON: ReportConfig
+        radar_included INTEGER DEFAULT 0,
+        evidence_included INTEGER DEFAULT 0,
+        generated_at TEXT NOT NULL,
+        FOREIGN KEY (assignment_id) REFERENCES assignments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS report_evidences (
+        id TEXT PRIMARY KEY,
+        report_id TEXT NOT NULL,
+        dimension_name TEXT NOT NULL,
+        avg_score REAL NOT NULL,
+        max_score REAL NOT NULL,
+        weakness_level TEXT NOT NULL,
+        courseware_refs TEXT DEFAULT '[]',   -- JSON
+        improvement_tips TEXT DEFAULT '[]',  -- JSON
+        FOREIGN KEY (report_id) REFERENCES reports(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_reports_assignment
+        ON reports(assignment_id);
+    CREATE INDEX IF NOT EXISTS idx_reports_student
+        ON reports(student_id);
+    CREATE INDEX IF NOT EXISTS idx_report_evidences_report
+        ON report_evidences(report_id);
     """
 
     def __init__(self, db_path: str = "qq_course.db"):
@@ -127,19 +192,52 @@ class DB:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # 启用 WAL 模式：读写不互斥，并发性能大幅提升
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        # 设置合理的 busy 超时（毫秒），避免并发写入时立即报错
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        # 写入后确保数据落盘
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        # 线程安全锁：保护所有写操作
+        self._write_lock = threading.Lock()
         self._init_schema()
 
     def _init_schema(self):
-        self._conn.executescript(self.SCHEMA_SQL)
-        self._conn.commit()
+        with self._write_lock:
+            self._conn.executescript(self.SCHEMA_SQL)
+            self._conn.commit()
+
+    def close(self):
+        """关闭数据库连接"""
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
     def _now(self) -> str:
         return _now_iso()
 
+    def _execute_write(self, sql: str, params: tuple = ()):
+        """线程安全的写操作：加锁执行 SQL 并提交"""
+        with self._write_lock:
+            self._conn.execute(sql, params)
+            self._conn.commit()
+
+    def _execute_write_many(self, operations: list):
+        """线程安全的批量写操作
+
+        Args:
+            operations: [(sql, params), ...] 列表，在一个锁内顺序执行并提交
+        """
+        with self._write_lock:
+            for sql, params in operations:
+                self._conn.execute(sql, params)
+            self._conn.commit()
+
     # ── Courseware ──────────────────────────────
 
     def save_courseware(self, cw: Courseware):
-        self._conn.execute(
+        self._execute_write(
             "INSERT OR REPLACE INTO courseware"
             "(id,title,content,file_path,uploaded_by,created_at,meta)"
             " VALUES (?,?,?,?,?,?,?)",
@@ -147,7 +245,6 @@ class DB:
              cw.uploaded_by, cw.created_at.isoformat(),
              json.dumps(cw.meta, ensure_ascii=False))
         )
-        self._conn.commit()
 
     def get_courseware(self, cw_id: str) -> Optional[Courseware]:
         row = self._conn.execute(
@@ -171,7 +268,7 @@ class DB:
              for d in r.dimensions],
             ensure_ascii=False
         )
-        self._conn.execute(
+        self._execute_write(
             "INSERT OR REPLACE INTO rubrics"
             "(id,title,dimensions,total_score,hard_rules,created_at)"
             " VALUES (?,?,?,?,?,?)",
@@ -179,7 +276,6 @@ class DB:
              json.dumps(r.hard_rules, ensure_ascii=False),
              r.created_at.isoformat())
         )
-        self._conn.commit()
 
     def get_rubric(self, rid: str) -> Optional[Rubric]:
         row = self._conn.execute(
@@ -204,7 +300,7 @@ class DB:
     # ── Assignment ─────────────────────────────
 
     def save_assignment(self, a: Assignment):
-        self._conn.execute(
+        self._execute_write(
             "INSERT OR REPLACE INTO assignments"
             "(id,title,description,rubric_id,courseware_id,"
             "deadline,max_score,created_at)"
@@ -214,7 +310,6 @@ class DB:
              a.deadline.isoformat() if a.deadline else None,
              a.max_score, a.created_at.isoformat())
         )
-        self._conn.commit()
 
     def get_assignment(self, aid: str) -> Optional[Assignment]:
         row = self._conn.execute(
@@ -240,7 +335,7 @@ class DB:
     # ── Submission ──────────────────────────────
 
     def save_submission(self, s: HomeworkSubmission):
-        self._conn.execute(
+        self._execute_write(
             "INSERT OR REPLACE INTO submissions"
             "(id,assignment_id,student_id,student_name,content,"
             "file_path,status,submitted_at,score,feedback,"
@@ -253,7 +348,6 @@ class DB:
              s.graded_at.isoformat() if s.graded_at else None,
              1 if s.plagiarized else 0, s.appeal_status)
         )
-        self._conn.commit()
 
     def get_submission(self, sid: str) -> Optional[HomeworkSubmission]:
         row = self._conn.execute(
@@ -295,7 +389,7 @@ class DB:
     # ── Grading Result ─────────────────────────
 
     def save_grading_result(self, g: GradingResult):
-        self._conn.execute(
+        self._execute_write(
             "INSERT OR REPLACE INTO grading_results"
             "(submission_id,dimension_scores,total_score,feedback,"
             "confidence,graded_by,graded_at,appeal_count)"
@@ -305,7 +399,6 @@ class DB:
              g.total_score, g.feedback, g.confidence,
              g.graded_by, g.graded_at.isoformat(), g.appeal_count)
         )
-        self._conn.commit()
 
     def get_grading_result(self, submission_id: str) -> Optional[GradingResult]:
         row = self._conn.execute(
@@ -328,21 +421,21 @@ class DB:
     # ── Appeal ──────────────────────────────────
 
     def save_appeal(self, a: Appeal):
-        self._conn.execute(
-            "INSERT OR REPLACE INTO appeals"
-            "(id,submission_id,student_id,reason,created_at,"
-            "status,new_score,reviewed_by)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (a.id, a.submission_id, a.student_id, a.reason,
-             a.created_at.isoformat(), a.status,
-             a.new_score, a.reviewed_by)
-        )
-        # 同时更新 submissions 表中 appeal_status
-        self._conn.execute(
-            "UPDATE submissions SET appeal_status=? WHERE id=?",
-            (a.status, a.submission_id)
-        )
-        self._conn.commit()
+        self._execute_write_many([
+            (
+                "INSERT OR REPLACE INTO appeals"
+                "(id,submission_id,student_id,reason,created_at,"
+                "status,new_score,reviewed_by)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (a.id, a.submission_id, a.student_id, a.reason,
+                 a.created_at.isoformat(), a.status,
+                 a.new_score, a.reviewed_by)
+            ),
+            (
+                "UPDATE submissions SET appeal_status=? WHERE id=?",
+                (a.status, a.submission_id)
+            ),
+        ])
 
     def get_appeal(self, aid: str) -> Optional[Appeal]:
         row = self._conn.execute(
@@ -368,22 +461,23 @@ class DB:
 
     def save_chunks(self, courseware_id: str,
                     chunks: List[str], embeddings: List = None):
-        # 先删除旧分块
-        self._conn.execute(
-            "DELETE FROM knowledge_chunks WHERE courseware_id=?",
-            (courseware_id,)
-        )
-        for i, text in enumerate(chunks):
-            emb = None
-            if embeddings and i < len(embeddings):
-                emb = json.dumps(embeddings[i], ensure_ascii=False)
+        with self._write_lock:
+            # 先删除旧分块
             self._conn.execute(
-                "INSERT INTO knowledge_chunks"
-                "(id,courseware_id,chunk_index,text,embedding)"
-                " VALUES (?,?,?,?,?)",
-                (f"{courseware_id}_{i}", courseware_id, i, text, emb)
+                "DELETE FROM knowledge_chunks WHERE courseware_id=?",
+                (courseware_id,)
             )
-        self._conn.commit()
+            for i, text in enumerate(chunks):
+                emb = None
+                if embeddings and i < len(embeddings):
+                    emb = json.dumps(embeddings[i], ensure_ascii=False)
+                self._conn.execute(
+                    "INSERT INTO knowledge_chunks"
+                    "(id,courseware_id,chunk_index,text,embedding)"
+                    " VALUES (?,?,?,?,?)",
+                    (f"{courseware_id}_{i}", courseware_id, i, text, emb)
+                )
+            self._conn.commit()
 
     def search_chunks(self, query: str, top_k: int = 3) -> List[str]:
         """关键词 fallback 搜索（chromadb 不可用时使用）"""
@@ -402,28 +496,29 @@ class DB:
     def save_session(self, session_id: str, user_id: str,
                      intent: str = None, waiting_for: str = None,
                      slots: Dict = None):
-        existing = self._conn.execute(
-            "SELECT * FROM sessions WHERE session_id=?",
-            (session_id,)
-        ).fetchone()
-        if existing:
-            self._conn.execute(
-                "UPDATE sessions SET intent=?, waiting_for=?, "
-                "slots=?, updated_at=? WHERE session_id=?",
-                (intent, waiting_for,
-                 json.dumps(slots or {}, ensure_ascii=False),
-                 self._now(), session_id)
-            )
-        else:
-            self._conn.execute(
-                "INSERT INTO sessions"
-                "(session_id,user_id,intent,waiting_for,slots,updated_at)"
-                " VALUES (?,?,?,?,?,?)",
-                (session_id, user_id, intent, waiting_for,
-                 json.dumps(slots or {}, ensure_ascii=False),
-                 self._now())
-            )
-        self._conn.commit()
+        with self._write_lock:
+            existing = self._conn.execute(
+                "SELECT * FROM sessions WHERE session_id=?",
+                (session_id,)
+            ).fetchone()
+            if existing:
+                self._conn.execute(
+                    "UPDATE sessions SET intent=?, waiting_for=?, "
+                    "slots=?, updated_at=? WHERE session_id=?",
+                    (intent, waiting_for,
+                     json.dumps(slots or {}, ensure_ascii=False),
+                     self._now(), session_id)
+                )
+            else:
+                self._conn.execute(
+                    "INSERT INTO sessions"
+                    "(session_id,user_id,intent,waiting_for,slots,updated_at)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (session_id, user_id, intent, waiting_for,
+                     json.dumps(slots or {}, ensure_ascii=False),
+                     self._now())
+                )
+            self._conn.commit()
 
     def get_session(self, session_id: str) -> Optional[Dict]:
         row = self._conn.execute(
@@ -464,3 +559,134 @@ class DB:
             "max_score": max(scores) if scores else 0,
             "min_score": min(scores) if scores else 0,
         }
+
+    # ── Reports ─────────────────────────────
+
+    def save_report(self, report_id: str, assignment_id: str,
+                    report_type: str, file_path: str,
+                    config: ReportConfig, student_id: str = None,
+                    radar_included: bool = False,
+                    evidence_included: bool = False):
+        """保存报告记录"""
+        self._execute_write(
+            "INSERT OR REPLACE INTO reports"
+            "(id,assignment_id,report_type,student_id,file_path,"
+            "config,radar_included,evidence_included,generated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (report_id, assignment_id, report_type, student_id, file_path,
+             json.dumps({
+                 "assignment_id": config.assignment_id,
+                 "report_type": config.report_type,
+                 "student_id": config.student_id,
+                 "include_radar": config.include_radar,
+                 "include_evidence": config.include_evidence,
+                 "include_ranking": config.include_ranking,
+                 "include_suggestions": config.include_suggestions,
+                 "comparison_students": config.comparison_students,
+             }, ensure_ascii=False),
+             1 if radar_included else 0,
+             1 if evidence_included else 0,
+             self._now())
+        )
+
+    def get_report(self, report_id: str) -> Optional[Dict]:
+        """获取报告记录"""
+        row = self._conn.execute(
+            "SELECT * FROM reports WHERE id=?", (report_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "assignment_id": row["assignment_id"],
+            "report_type": row["report_type"],
+            "student_id": row["student_id"],
+            "file_path": row["file_path"],
+            "config": json.loads(row["config"]),
+            "radar_included": bool(row["radar_included"]),
+            "evidence_included": bool(row["evidence_included"]),
+            "generated_at": row["generated_at"],
+        }
+
+    def list_reports(self, assignment_id: str = None,
+                     student_id: str = None) -> List[Dict]:
+        """列出报告记录"""
+        conditions = []
+        params = []
+        if assignment_id:
+            conditions.append("assignment_id=?")
+            params.append(assignment_id)
+        if student_id:
+            conditions.append("student_id=?")
+            params.append(student_id)
+        where = " AND ".join(conditions) if conditions else "1=1"
+        rows = self._conn.execute(
+            f"SELECT * FROM reports WHERE {where} ORDER BY generated_at DESC",
+            tuple(params)
+        ).fetchall()
+        return [self.get_report(r["id"]) for r in rows]
+
+    # ── Report Evidences ──────────────────────
+
+    def save_report_evidence(self, report_id: str,
+                             evidence: ReportEvidence):
+        """保存课件依据条目"""
+        eid = f"ev_{evidence.dimension_name}_{report_id}"
+        self._execute_write(
+            "INSERT OR REPLACE INTO report_evidences"
+            "(id,report_id,dimension_name,avg_score,max_score,"
+            "weakness_level,courseware_refs,improvement_tips)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (eid, report_id, evidence.dimension_name,
+             evidence.avg_score, evidence.max_score,
+             evidence.weakness_level,
+             json.dumps(evidence.courseware_refs, ensure_ascii=False),
+             json.dumps(evidence.improvement_tips, ensure_ascii=False))
+        )
+
+    def get_report_evidences(self, report_id: str) -> List[ReportEvidence]:
+        """获取报告的课件依据列表"""
+        rows = self._conn.execute(
+            "SELECT * FROM report_evidences WHERE report_id=?",
+            (report_id,)
+        ).fetchall()
+        return [
+            ReportEvidence(
+                dimension_name=row["dimension_name"],
+                avg_score=row["avg_score"],
+                max_score=row["max_score"],
+                weakness_level=row["weakness_level"],
+                courseware_refs=json.loads(row["courseware_refs"]),
+                improvement_tips=json.loads(row["improvement_tips"]),
+            )
+            for row in rows
+        ]
+
+    # ── 维度统计 ──────────────────────────────
+
+    def get_dimension_stats(self, assignment_id: str) -> Dict[str, Dict]:
+        """获取各维度的统计数据（平均分、最高分、最低分）"""
+        submissions = self.list_submissions(assignment_id)
+        dim_stats: Dict[str, Dict] = {}
+
+        for sub in submissions:
+            result = self.get_grading_result(sub.id)
+            if not result or not result.dimension_scores:
+                continue
+            for dim_name, score in result.dimension_scores.items():
+                if dim_name not in dim_stats:
+                    dim_stats[dim_name] = {"scores": [], "count": 0}
+                dim_stats[dim_name]["scores"].append(score)
+                dim_stats[dim_name]["count"] += 1
+
+        # 计算统计量
+        result = {}
+        for dim_name, data in dim_stats.items():
+            scores = data["scores"]
+            result[dim_name] = {
+                "avg": round(sum(scores) / len(scores), 2) if scores else 0,
+                "max": max(scores) if scores else 0,
+                "min": min(scores) if scores else 0,
+                "count": len(scores),
+            }
+        return result

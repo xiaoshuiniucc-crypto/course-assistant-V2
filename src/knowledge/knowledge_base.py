@@ -1,9 +1,10 @@
 """
 知识库模块
-ChromaDB 向量检索 + 中文分词 fallback
+ChromaDB 向量检索（持久化模式）+ 中文分词 fallback
 """
 from __future__ import annotations
 import re
+import os
 import uuid
 import logging
 from typing import List, Optional, Dict
@@ -12,32 +13,48 @@ from storage.db import DB
 
 logger = logging.getLogger("knowledge")
 
+# 默认 ChromaDB 持久化路径
+DEFAULT_CHROMA_PATH = os.path.join(
+    os.environ.get("COURSE_ASSISTANT_DATA", ".data"), "chromadb"
+)
+
 
 class KnowledgeBase:
     """
     向量知识库
-    - 优先使用 ChromaDB 进行语义检索
+    - 优先使用 ChromaDB PersistentClient 进行语义检索（数据持久化到磁盘）
     - fallback: 字符级 2-gram + 单字 + 英文词的关键词匹配
     - 分块策略: 短文单块 / 章节标题分割 / 滑动窗口
+
+    配置:
+      COURSE_ASSISTANT_DATA  - 数据根目录（默认 .data），ChromaDB 存储在子目录 chromadb/
     """
 
-    def __init__(self, db: DB, collection_name: str = "course_knowledge"):
+    def __init__(self, db: DB, collection_name: str = "course_knowledge",
+                 chroma_path: Optional[str] = None):
         self.db = db
         self.collection_name = collection_name
         self._chroma = None
         self._collection = None
+        self._chroma_path = chroma_path or DEFAULT_CHROMA_PATH
         self._init_chroma()
 
     def _init_chroma(self):
-        """初始化 ChromaDB"""
+        """初始化 ChromaDB（持久化模式）"""
         try:
             import chromadb
-            self._chroma = chromadb.Client()   # 内存模式
+            # 使用 PersistentClient 持久化到磁盘，重启后数据不丢失
+            os.makedirs(self._chroma_path, exist_ok=True)
+            self._chroma = chromadb.PersistentClient(path=self._chroma_path)
             self._collection = self._chroma.get_or_create_collection(
                 name=self.collection_name,
                 metadata={"hnsw:space": "cosine"}
             )
-            logger.info("ChromaDB 向量检索已启用")
+            count = self._collection.count()
+            logger.info(
+                f"ChromaDB 持久化检索已启用 "
+                f"(路径: {self._chroma_path}, 已有 {count} 条记录)"
+            )
         except Exception as e:
             logger.warning(f"ChromaDB 初始化失败: {e}, 使用关键词 fallback")
             self._chroma = None

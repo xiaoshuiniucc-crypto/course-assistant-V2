@@ -53,6 +53,12 @@ INTENT_RULES: List[Dict] = [
         "message_types": [MessageType.PRIVATE, MessageType.GROUP],
     },
     {
+        "intent": IntentType.GENERATE_STUDENT_REPORT,
+        "keywords": ["我的报告", "个人报告", "学生报告", "雷达图", "课件依据", "成绩详情", "查看我的成绩"],
+        "tags": [],
+        "message_types": [MessageType.PRIVATE, MessageType.GROUP],
+    },
+    {
         "intent": IntentType.TA_APPROVE,
         "keywords": ["同意申诉", "批准申诉", "通过申诉", "同意，", "批准，", "1"],
         "tags": ["ta_channel"],
@@ -72,8 +78,16 @@ INTENT_RULES: List[Dict] = [
     },
     {
         "intent": IntentType.ASK_QUESTION,
-        "keywords": ["问题", "提问", "请教", "问一下", "怎么", "如何", "什么是", "为什么"],
+        "keywords": ["请教", "问一下", "请问", "解释一下", "帮我理解", "讲一下"],
         "tags": [],
+        "message_types": [MessageType.PRIVATE, MessageType.GROUP],
+    },
+    {
+        "intent": IntentType.TA_COMMAND,
+        "keywords": ["/待审列表", "/pending", "/处理", "/handle",
+                     "/历史", "/history", "/统计", "/stats",
+                     "/帮助", "/help"],
+        "tags": ["ta_channel"],
         "message_types": [MessageType.PRIVATE, MessageType.GROUP],
     },
 ]
@@ -88,7 +102,6 @@ class SessionState:
     WAITING_COURSE_CONFIRM = "waiting_course_confirm"
     WAITING_APPEAL_REASON = "waiting_appeal_reason"
     WAITING_RUBRIC_TEXT = "waiting_rubric_text"
-    WAITING_ASSIGNMENT_DETAIL = "waiting_assignment_detail"
     WAITING_TA_REVIEW = "waiting_ta_review"
     NONE = None
 
@@ -132,6 +145,11 @@ class IntentRouter:
             for kw in rule["keywords"]:
                 if kw in content:
                     score += 0.4
+
+            # ASK_QUESTION 意图降权：避免抢占具体操作意图
+            # 因为"请教"等词可能出现在"请教老师设置评分标准"等消息中
+            if rule["intent"] == IntentType.ASK_QUESTION and score > 0:
+                score *= 0.6
 
             # 消息类型匹配
             if message.message_type in rule.get("message_types", []):

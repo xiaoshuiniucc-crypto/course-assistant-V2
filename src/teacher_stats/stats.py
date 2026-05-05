@@ -112,27 +112,68 @@ class TeacherStats:
         return alerts
 
     def _detect_plagiarism(self, submissions: List,
-                           threshold: float = 0.6) -> List:
+                           threshold: float = 0.6,
+                           min_length: int = 100) -> List:
         """
-        4-gram 抄袭检测
+        改进版抄袭检测
+        - 跳过同一学生的多次提交（自身去重）
+        - 跳过过短内容（< min_length 字符）
+        - 过滤公共短语（高频 n-gram 在超过30%提交中出现则排除）
+        - 使用 overlap coefficient 替代 Jaccard（更敏感于包含关系）
+
         Returns: [(sub1, sub2, overlap_ratio)]
         """
+        # 过滤有效提交：内容足够长
+        valid = [s for s in submissions
+                 if s.content and len(s.content) >= min_length]
+        if len(valid) < 2:
+            return []
+
+        # 计算所有 n-gram 的文档频率，用于过滤公共短语
+        all_ngram_sets = {}
+        for s in valid:
+            all_ngram_sets[s.id] = self._get_ngrams(s.content, 4)
+
+        # 统计每个 n-gram 在多少个文档中出现
+        from collections import Counter
+        doc_freq = Counter()
+        for ngrams in all_ngram_sets.values():
+            doc_freq.update(ngrams)
+
+        total_docs = len(valid)
+        # 公共短语阈值：超过 30% 的文档都包含的 n-gram 视为公共短语
+        common_threshold = total_docs * 0.3
+        common_ngrams = {ng for ng, cnt in doc_freq.items()
+                         if cnt > max(common_threshold, 2)}
+
         pairs = []
-        for i in range(len(submissions)):
-            for j in range(i + 1, len(submissions)):
-                s1, s2 = submissions[i], submissions[j]
-                if not s1.content or not s2.content:
+        seen_pairs = set()  # 避免重复检测
+
+        for i in range(len(valid)):
+            for j in range(i + 1, len(valid)):
+                s1, s2 = valid[i], valid[j]
+
+                # 自身去重：同一学生的不同提交不做抄袭比较
+                if s1.student_id == s2.student_id:
                     continue
 
-                ngrams1 = self._get_ngrams(s1.content, 4)
-                ngrams2 = self._get_ngrams(s2.content, 4)
+                # 避免重复
+                pair_key = (min(s1.id, s2.id), max(s1.id, s2.id))
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+
+                ngrams1 = all_ngram_sets[s1.id] - common_ngrams
+                ngrams2 = all_ngram_sets[s2.id] - common_ngrams
 
                 if not ngrams1 or not ngrams2:
                     continue
 
+                # 使用 overlap coefficient: |A∩B| / min(|A|, |B|)
+                # 比 Jaccard 更敏感于"小文本是大文本的子集"情况
                 intersection = ngrams1 & ngrams2
-                union = ngrams1 | ngrams2
-                overlap = len(intersection) / len(union) if union else 0
+                min_size = min(len(ngrams1), len(ngrams2))
+                overlap = len(intersection) / min_size if min_size else 0
 
                 if overlap > threshold:
                     pairs.append((s1, s2, overlap))

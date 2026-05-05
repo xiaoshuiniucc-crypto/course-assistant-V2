@@ -7,10 +7,18 @@ import asyncio
 import logging
 import sys
 import os
+from datetime import datetime
 from typing import Optional
 
 # 添加 src 到 path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# 加载 .env 环境变量（必须在导入模块之前）
+from dotenv import load_dotenv
+_env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+load_dotenv(_env_path, override=False)
+logger_init = logging.getLogger("main")
+logger_init.info(f"已加载 .env: {_env_path}")
 
 from qclaw.adapter import QclawAdapter
 from router.router import IntentRouter
@@ -48,15 +56,22 @@ class QQCourseAssistant:
         self.qclaw = QclawAdapter()
         self.router = IntentRouter(self.db)
         self.knowledge = KnowledgeBase(self.db)
-        self.ta_channel = TAChannelManager(self.db)
+        self.ta_channel = TAChannelManager(
+            self.db,
+            qclaw_adapter=self.qclaw,
+        )
         self.teacher_stats = TeacherStats(self.db)
-        self.report_gen = ReportGenerator(self.db)
+        self.report_gen = ReportGenerator(self.db, knowledge_base=self.knowledge)
         self.rubric_parser = RubricParser()
         self.file_parser = FileParser()
         self.homework = HomeworkReceiver(self.db)
         self.grading = GradingEngine(self.db)
         self.notifier = ResultNotifier(self.qclaw)
-        self.appeal_handler = AppealHandler(self.db, self.grading)
+        # 申诉处理器：传入通知回调，审批后自动通知学生
+        self.appeal_handler = AppealHandler(
+            self.db, self.grading,
+            notify_callback=self._notify_student
+        )
 
         # 注册消息处理器
         self.qclaw.on_message(self._handle_message)
@@ -84,8 +99,12 @@ class QQCourseAssistant:
                 await self._handle_appeal(msg, intent)
             elif intent.intent == IntentType.VIEW_REPORT:
                 await self._handle_view_report(msg, intent)
+            elif intent.intent == IntentType.GENERATE_STUDENT_REPORT:
+                await self._handle_student_report(msg, intent)
             elif intent.intent in (IntentType.TA_APPROVE, IntentType.TA_REJECT):
                 await self._handle_ta_action(msg, intent)
+            elif intent.intent == IntentType.TA_COMMAND:
+                await self._handle_ta_command(msg, intent)
             elif intent.intent == IntentType.QUERY_PROGRESS:
                 await self._handle_query_progress(msg, intent)
             elif intent.intent == IntentType.ASK_QUESTION:
@@ -109,11 +128,102 @@ class QQCourseAssistant:
     # ── 各意图处理器 ────────────────────────
 
     async def _handle_upload_courseware(self, msg: QQMessage, intent):
-        """处理课件上传"""
+        """处理课件上传 — 完整链路"""
+        import uuid
+        from contracts.models import Courseware
+
+        # 1. 如果消息带有文件附件，直接处理
+        if msg.file_url and msg.file_name:
+            try:
+                save_path = os.path.join(
+                    ".data", "courseware",
+                    f"{uuid.uuid4().hex[:8]}_{msg.file_name}"
+                )
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+                await self.qclaw.download_file(msg.file_url, save_path)
+
+                # 2. 解析文件内容
+                parsed = self.file_parser.parse(save_path)
+                if not parsed.get("text"):
+                    await self.qclaw.send_message(
+                        msg.user_id,
+                        f"课件解析失败: {parsed.get('error', '无法提取文本')}"
+                    )
+                    return
+
+                text = parsed["text"]
+                title = parsed.get("title") or msg.file_name
+
+                # 3. 存储课件
+                courseware = Courseware(
+                    id=f"cw_{uuid.uuid4().hex[:8]}",
+                    title=title,
+                    content=text,
+                    file_path=save_path,
+                    uploaded_by=msg.user_id,
+                    created_at=datetime.now(),
+                )
+                self.db.save_courseware(courseware)
+
+                # 4. 入库知识库（分块 + 向量化）
+                self.knowledge.add_courseware(
+                    courseware_id=courseware.id,
+                    text=text,
+                    metadata={"title": title, "uploaded_by": msg.user_id}
+                )
+
+                chunk_count = self.knowledge.get_chunk_count(courseware.id)
+                await self.qclaw.send_message(
+                    msg.user_id,
+                    f"课件上传成功!\n"
+                    f"标题: {title}\n"
+                    f"课件ID: {courseware.id}\n"
+                    f"分块数: {chunk_count}\n"
+                    f"字数: {len(text)}"
+                )
+
+            except IOError as e:
+                await self.qclaw.send_message(
+                    msg.user_id, f"文件下载失败: {e}"
+                )
+            except Exception as e:
+                logger.error(f"课件处理异常: {e}", exc_info=True)
+                await self.qclaw.send_message(
+                    msg.user_id, f"课件处理出错: {e}"
+                )
+            return
+
+        # 2. 如果消息中有纯文本内容，直接作为课件入库
+        content = msg.content.replace("上传课件", "").strip()
+        if content and len(content) >= 20:
+            courseware = Courseware(
+                id=f"cw_{uuid.uuid4().hex[:8]}",
+                title=content[:30] + "...",
+                content=content,
+                file_path="",
+                uploaded_by=msg.user_id,
+                created_at=datetime.now(),
+            )
+            self.db.save_courseware(courseware)
+            self.knowledge.add_courseware(
+                courseware_id=courseware.id,
+                text=content,
+            )
+            chunk_count = self.knowledge.get_chunk_count(courseware.id)
+            await self.qclaw.send_message(
+                msg.user_id,
+                f"文本课件已入库!\n"
+                f"课件ID: {courseware.id}\n"
+                f"分块数: {chunk_count}"
+            )
+            return
+
+        # 3. 无文件也无足够文本，引导用户上传
         await self.qclaw.send_message(
             msg.user_id,
-            "课件上传功能需要文件附件支持。\n"
-            "请将课件文件发送给我（支持 PDF/DOCX/TXT/MD）"
+            "请上传课件文件（支持 PDF/DOCX/TXT/MD），\n"
+            "或直接发送课件文本内容（至少20字）"
         )
 
     async def _handle_set_rubric(self, msg: QQMessage, intent):
@@ -177,17 +287,22 @@ class QQCourseAssistant:
         if not content:
             content = "（学生提交内容）"
 
-        submission = self.homework.receive(
-            assignment_id=assignment.id,
-            student_id=msg.user_id,
-            student_name=f"学生_{msg.user_id[:4]}",
-            content=content,
-        )
-        await self.qclaw.send_message(
-            msg.user_id,
-            f"作业已提交! 提交ID: {submission.id}\n"
-            f"状态: {submission.status}"
-        )
+        try:
+            submission = self.homework.receive(
+                assignment_id=assignment.id,
+                student_id=msg.user_id,
+                student_name=f"学生_{msg.user_id[:4]}",
+                content=content,
+            )
+            await self.qclaw.send_message(
+                msg.user_id,
+                f"作业已提交! 提交ID: {submission.id}\n"
+                f"状态: {submission.status}"
+            )
+        except ValueError as e:
+            await self.qclaw.send_message(
+                msg.user_id, f"提交失败: {e}"
+            )
 
     async def _handle_appeal(self, msg: QQMessage, intent):
         """处理申诉"""
@@ -214,9 +329,14 @@ class QQCourseAssistant:
                     student_id=msg.user_id,
                     reason=reason,
                 )
-                # 推送给 TA
-                push = self.ta_channel.format_appeal_push(appeal, sub)
-                await self.qclaw.send_message(msg.user_id, push)
+                # 推送给 TA 频道（完整推送，含分配和通知队列）
+                await self.ta_channel.push_appeal_to_ta_channel(appeal, sub)
+                # 同时给学生确认
+                await self.qclaw.send_message(
+                    msg.user_id,
+                    f"✅ 申诉已提交! 申诉ID: {appeal.id}\n"
+                    f"已通知助教处理，请耐心等待。"
+                )
                 return
 
         await self.qclaw.send_message(
@@ -224,7 +344,9 @@ class QQCourseAssistant:
         )
 
     async def _handle_view_report(self, msg: QQMessage, intent):
-        """处理查看报告"""
+        """处理查看报告（班级汇总，含雷达图+课件依据）"""
+        from contracts.models import ReportConfig, ReportType
+
         assignments = self.db.list_assignments()
         if not assignments:
             await self.qclaw.send_message(
@@ -233,15 +355,71 @@ class QQCourseAssistant:
             return
 
         assignment = assignments[-1]
-        path = self.report_gen.get_or_generate(assignment.id)
+        config = ReportConfig(
+            assignment_id=assignment.id,
+            report_type=ReportType.CLASS_SUMMARY,
+            include_radar=True,
+            include_evidence=True,
+        )
+        path = self.report_gen.generate_with_config(config)
         await self.qclaw.send_message(
             msg.user_id,
-            f"报告已生成: {os.path.basename(path)}\n"
-            f"路径: {path}"
+            f"📊 班级报告已生成: {os.path.basename(path)}\n"
+            f"路径: {path}\n"
+            f"含雷达图: ✅ | 含课件依据: ✅"
+        )
+
+    async def _handle_student_report(self, msg: QQMessage, intent):
+        """处理学生个人报告（雷达图+课件依据+排名）"""
+        from contracts.models import ReportConfig, ReportType
+
+        assignments = self.db.list_assignments()
+        if not assignments:
+            await self.qclaw.send_message(
+                msg.user_id, "暂无作业，无法生成个人报告"
+            )
+            return
+
+        assignment = assignments[-1]
+        student_id = msg.user_id
+
+        # 检查学生是否有提交
+        submission = self.db.get_student_submission(assignment.id, student_id)
+        if not submission:
+            await self.qclaw.send_message(
+                msg.user_id,
+                f"您尚未提交作业「{assignment.title}」\n"
+                f"请先提交作业后再查看个人报告"
+            )
+            return
+
+        config = ReportConfig(
+            assignment_id=assignment.id,
+            report_type=ReportType.STUDENT_DETAIL,
+            student_id=student_id,
+            include_radar=True,
+            include_evidence=True,
+            include_ranking=True,
+        )
+        path = self.report_gen.generate_with_config(config)
+        await self.qclaw.send_message(
+            msg.user_id,
+            f"👤 个人报告已生成: {os.path.basename(path)}\n"
+            f"路径: {path}\n"
+            f"含雷达图: ✅ | 含课件依据: ✅ | 含排名: ✅"
         )
 
     async def _handle_ta_action(self, msg: QQMessage, intent):
-        """处理 TA 审批"""
+        """处理 TA 审批（含角色鉴权）"""
+        # 角色鉴权：检查用户是否有 TA/教师权限
+        if msg.group_id:
+            roles = await self.qclaw.get_member_roles(msg.group_id, msg.user_id)
+            if not any(r in ("teacher", "ta") for r in roles):
+                await self.qclaw.send_message(
+                    msg.user_id, "您没有 TA/教师权限，无法审批申诉"
+                )
+                return
+
         action, note = self.ta_channel.parse_ta_instruction(msg.content)
         pending = self.db.list_pending_appeals()
 
@@ -259,6 +437,31 @@ class QQCourseAssistant:
             appeal.id, action, note
         )
         await self.qclaw.send_message(msg.user_id, confirm)
+
+    async def _handle_ta_command(self, msg: QQMessage, intent):
+        """处理 TA 工作台指令"""
+        from ta_channel.ta_channel import TACommandParser
+
+        # 解析指令
+        command, params = TACommandParser.parse(msg.content)
+
+        if command == "unknown":
+            await self.qclaw.send_message(
+                msg.user_id,
+                "⚠️ 无法识别的 TA 指令。输入 /帮助 查看可用指令"
+            )
+            return
+
+        # 处理指令
+        reply = await self.ta_channel.handle_ta_command(
+            message=msg,
+            command=command,
+            params=params,
+            appeal_handler=self.appeal_handler,
+        )
+
+        if reply:
+            await self.qclaw.send_message(msg.user_id, reply)
 
     async def _handle_query_progress(self, msg: QQMessage, intent):
         """处理进度查询"""
@@ -286,12 +489,28 @@ class QQCourseAssistant:
                 "抱歉，知识库中没有找到相关内容。"
             )
 
+    # ── 通知辅助 ────────────────────────────
+
+    async def _notify_student(self, student_id: str, message: str):
+        """通知学生（用于申诉结果等自动通知）"""
+        try:
+            await self.qclaw.send_message(student_id, message)
+        except Exception as e:
+            logger.warning(f"通知学生失败: student={student_id}, error={e}")
+
     # ── 启动 ────────────────────────────────
 
     async def run(self):
         """启动助手"""
         logger.info(f"Qclaw 模式: {self.qclaw.mode}")
         await self.qclaw.start()
+
+        # 启动通知队列消费者
+        notify_queue = self.ta_channel.get_notify_queue()
+        if notify_queue:
+            notify_queue.start_consumer(loop=asyncio.get_event_loop())
+            logger.info("通知队列消费者已启动")
+
         logger.info("QQ 课程助手已启动")
 
 

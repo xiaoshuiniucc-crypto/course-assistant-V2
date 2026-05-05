@@ -12,7 +12,7 @@ from storage.db import DB
 
 
 class HomeworkReceiver:
-    """作业提交管理"""
+    """作业提交管理（含截止日期校验）"""
 
     def __init__(self, db: DB):
         self.db = db
@@ -25,7 +25,25 @@ class HomeworkReceiver:
         content: str,
         file_path: Optional[str] = None,
     ) -> HomeworkSubmission:
-        """接收一份作业提交"""
+        """接收一份作业提交
+
+        Returns:
+            HomeworkSubmission: 提交对象
+
+        Raises:
+            ValueError: 作业不存在或已过截止日期
+        """
+        # 检查作业是否存在
+        assignment = self.db.get_assignment(assignment_id)
+        if not assignment:
+            raise ValueError(f"作业不存在: {assignment_id}")
+
+        # 检查截止日期
+        if assignment.deadline and datetime.now() > assignment.deadline:
+            raise ValueError(
+                f"作业已过截止日期 ({assignment.deadline.strftime('%Y-%m-%d %H:%M')})"
+            )
+
         # 检查是否已提交
         existing = self.db.get_student_submission(assignment_id, student_id)
         if existing and existing.status in (

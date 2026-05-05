@@ -28,8 +28,10 @@ class IntentType:
     SUBMIT_HOMEWORK = "submit_homework"
     APPEAL = "appeal"
     VIEW_REPORT = "view_report"
+    GENERATE_STUDENT_REPORT = "generate_student_report"  # 学生个人报告（雷达图+课件依据）
     TA_APPROVE = "ta_approve"
     TA_REJECT = "ta_reject"
+    TA_COMMAND = "ta_command"          # TA 工作台指令
     QUERY_PROGRESS = "query_progress"
     ASK_QUESTION = "ask_question"
     UNKNOWN = "unknown"
@@ -180,3 +182,48 @@ class IntentResult:
     session_id: str
     waiting_for: Optional[str] = None   # 多轮对话等待的字段
     slots: Dict[str, Any] = field(default_factory=dict)
+
+
+# ─────────────────────────────────────────────
+# M12 报告增强模型
+# ─────────────────────────────────────────────
+
+class ReportType:
+    """报告类型"""
+    CLASS_SUMMARY = "class_summary"           # 班级汇总报告
+    STUDENT_DETAIL = "student_detail"         # 学生个人详细报告
+    RADAR_COMPARISON = "radar_comparison"      # 雷达图对比报告
+    COURSEWARE_EVIDENCE = "courseware_evidence"  # 课件依据报告
+
+
+@dataclass
+class ReportConfig:
+    """报告生成配置"""
+    assignment_id: str
+    report_type: str = ReportType.CLASS_SUMMARY
+    student_id: Optional[str] = None          # 学生个人报告时指定
+    include_radar: bool = True                 # 是否包含雷达图
+    include_evidence: bool = True              # 是否包含课件依据
+    include_ranking: bool = True               # 是否包含排名
+    include_suggestions: bool = True           # 是否包含改进建议
+    comparison_students: List[str] = field(default_factory=list)  # 雷达图对比学生
+
+
+@dataclass
+class ReportEvidence:
+    """课件依据条目"""
+    dimension_name: str              # 评分维度名
+    avg_score: float                 # 班级该维度平均分
+    max_score: float                 # 该维度满分
+    weakness_level: str              # weak / medium / strong
+    courseware_refs: List[str] = field(default_factory=list)    # 引用的课件段落
+    improvement_tips: List[str] = field(default_factory=list)   # 改进建议
+
+
+@dataclass
+class RadarData:
+    """雷达图数据"""
+    dimensions: List[str]                                # 维度名称列表
+    class_avg: List[float]                               # 班级平均分
+    student_scores: Dict[str, List[float]] = field(default_factory=dict)  # 学生ID→各维度分数
+    max_scores: List[float] = field(default_factory=list)  # 各维度满分

@@ -1,23 +1,35 @@
 """
 申诉处理器
-处理学生对批改结果的申诉
+处理学生对批改结果的申诉，支持审批后自动通知
 """
 from __future__ import annotations
 import uuid
+import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Callable, Awaitable
 
 from contracts.models import Appeal, HomeworkSubmission, GradingResult, SubmitStatus
 from storage.db import DB
 from grading.engine import GradingEngine
 
+logger = logging.getLogger("appeal")
+
 
 class AppealHandler:
-    """申诉处理"""
+    """申诉处理（含审批后自动通知）"""
 
-    def __init__(self, db: DB, grading_engine: GradingEngine):
+    def __init__(self, db: DB, grading_engine: GradingEngine,
+                 notify_callback: Optional[Callable] = None):
+        """
+        Args:
+            db: 数据库
+            grading_engine: 批改引擎
+            notify_callback: 审批完成后的通知回调
+                签名: async callback(student_id: str, message: str) -> None
+        """
         self.db = db
         self.grading_engine = grading_engine
+        self._notify_callback = notify_callback
 
     def submit_appeal(self, submission_id: str,
                       student_id: str,
@@ -96,6 +108,28 @@ class AppealHandler:
                 self.db.save_submission(submission)
 
         self.db.save_appeal(appeal)
+
+        # 自动通知学生审批结果
+        if self._notify_callback and submission:
+            try:
+                if approved:
+                    new_score = appeal.new_score or submission.score
+                    notify_msg = (
+                        f"您的申诉已批准!\n"
+                        f"新分数: {new_score}分\n"
+                        f"审核人: {reviewer_id}"
+                    )
+                else:
+                    notify_msg = (
+                        f"您的申诉已驳回。\n"
+                        f"原分数维持不变 ({submission.score}分)\n"
+                        f"审核人: {reviewer_id}"
+                    )
+                self._notify_callback(submission.student_id, notify_msg)
+                logger.info(f"申诉通知已发送: student={submission.student_id}")
+            except Exception as e:
+                logger.warning(f"申诉通知发送失败: {e}")
+
         return appeal
 
     def list_pending(self):

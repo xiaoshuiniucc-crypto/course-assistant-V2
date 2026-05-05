@@ -114,7 +114,7 @@ async def main():
         ("同意申诉，加回分数", IntentType.TA_APPROVE),
         ("驳回申诉", IntentType.TA_REJECT),
         ("查询进度", IntentType.QUERY_PROGRESS),
-        ("什么是数据库？", IntentType.ASK_QUESTION),
+        ("请教一下数据库", IntentType.ASK_QUESTION),
     ]
 
     for content, expected_intent in test_intents:
