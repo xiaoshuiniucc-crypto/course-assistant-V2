@@ -24,6 +24,7 @@ class HomeworkReceiver:
         student_name: str,
         content: str,
         file_path: Optional[str] = None,
+        course_id: str = "default",
     ) -> HomeworkSubmission:
         """接收一份作业提交
 
@@ -45,7 +46,7 @@ class HomeworkReceiver:
             )
 
         # 检查是否已提交
-        existing = self.db.get_student_submission(assignment_id, student_id)
+        existing = self.db.get_student_submission(assignment_id, student_id, course_id)
         if existing and existing.status in (
             SubmitStatus.SUBMITTED, SubmitStatus.GRADED, SubmitStatus.FINAL
         ):
@@ -59,6 +60,7 @@ class HomeworkReceiver:
             student_name=student_name,
             content=content,
             file_path=file_path,
+            course_id=course_id,
             status=SubmitStatus.SUBMITTED,
             submitted_at=datetime.now(),
         )

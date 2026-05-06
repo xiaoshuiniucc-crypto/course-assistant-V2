@@ -242,6 +242,8 @@ class ReportGenerator:
     def _collect_evidences(self, assignment_id: str,
                            radar_data: RadarData) -> List[ReportEvidence]:
         """收集课件依据"""
+        assignment = self.db.get_assignment(assignment_id)
+        course_id = assignment.course_id if assignment else "default"
         evidences = []
         for i, dim_name in enumerate(radar_data.dimensions):
             avg = radar_data.class_avg[i] if i < len(radar_data.class_avg) else 0
@@ -260,10 +262,12 @@ class ReportGenerator:
             refs = []
             if self.knowledge_base:
                 try:
-                    results = self.knowledge_base.search(
-                        dim_name, top_k=3
+                    results = self.knowledge_base.search_results(
+                        dim_name,
+                        top_k=3,
+                        course_id=course_id,
                     )
-                    refs = results[:3]
+                    refs = [item.as_reference_text() for item in results[:3]]
                 except Exception as e:
                     logger.warning(f"知识库检索失败: {dim_name}, {e}")
 

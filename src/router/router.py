@@ -31,7 +31,7 @@ INTENT_RULES: List[Dict[str, Any]] = [
     },
     {
         "intent": IntentType.SUBMIT_HOMEWORK,
-        "keywords": ["提交作业", "交作业", "作业提交", "交了", "交完了"],
+        "keywords": ["提交作业", "上传作业", "交作业", "作业提交", "交了", "交完了"],
         "tags": [],
         "message_types": [MessageType.PRIVATE, MessageType.GROUP],
     },
@@ -90,6 +90,7 @@ class SessionState:
     WAITING_COURSE_CONFIRM = "waiting_course_confirm"
     WAITING_APPEAL_REASON = "waiting_appeal_reason"
     WAITING_RUBRIC_TEXT = "waiting_rubric_text"
+    WAITING_RUBRIC_APPROVAL = "waiting_rubric_approval"
     WAITING_TA_REVIEW = "waiting_ta_review"
     NONE = None
 
@@ -108,6 +109,10 @@ class IntentRouter:
         best_score = 0.0
         best_slots: Dict[str, Any] = {}
         content = message.content.strip()
+
+        file_intent = self._classify_file_message(message, session_id)
+        if file_intent is not None:
+            return file_intent
 
         for rule in INTENT_RULES:
             score = 0.0
@@ -152,6 +157,50 @@ class IntentRouter:
             confidence=confidence,
             session_id=session_id,
             slots=best_slots,
+        )
+
+    def _classify_file_message(
+        self,
+        message: QQMessage,
+        session_id: str,
+    ) -> IntentResult | None:
+        if not message.file_url:
+            return None
+
+        slots: Dict[str, Any] = {
+            "file_url": message.file_url,
+        }
+        if message.file_name:
+            slots["file_name"] = message.file_name
+
+        content = (message.content or "").strip()
+        is_group = message.message_type == MessageType.GROUP
+        is_private = message.message_type == MessageType.PRIVATE
+
+        if is_group:
+            intent = IntentType.UPLOAD_COURSEWARE
+            confidence = 0.9
+        elif is_private:
+            if self._looks_like_courseware_upload(content) or self._looks_like_courseware_file(message.file_name):
+                intent = IntentType.UPLOAD_COURSEWARE
+                confidence = 0.95
+            else:
+                intent = IntentType.SUBMIT_HOMEWORK
+                confidence = 0.85
+        else:
+            return None
+
+        self.db.save_session(
+            session_id=session_id,
+            user_id=message.user_id,
+            intent=intent,
+            slots=slots,
+        )
+        return IntentResult(
+            intent=intent,
+            confidence=confidence,
+            session_id=session_id,
+            slots=slots,
         )
 
     def _handle_multi_turn(self, message: QQMessage, session: Dict, session_id: str) -> IntentResult:
@@ -200,6 +249,23 @@ class IntentRouter:
                 slots=slots,
             )
             return IntentResult(IntentType.SET_RUBRIC, 0.9, session_id, slots=slots)
+
+        elif waiting == SessionState.WAITING_RUBRIC_APPROVAL:
+            slots["teacher_reply"] = message.content
+            self.db.save_session(
+                session_id=session_id,
+                user_id=message.user_id,
+                intent=IntentType.SET_RUBRIC,
+                waiting_for=SessionState.WAITING_RUBRIC_APPROVAL,
+                slots=slots,
+            )
+            return IntentResult(
+                IntentType.SET_RUBRIC,
+                0.95,
+                session_id,
+                waiting_for=SessionState.WAITING_RUBRIC_APPROVAL,
+                slots=slots,
+            )
 
         elif waiting == SessionState.WAITING_TA_REVIEW:
             content = message.content.strip()
@@ -252,6 +318,42 @@ class IntentRouter:
             "能否", "是否", "为什么", "怎么", "如何", "哪里", "哪种",
         ]
         return any(pattern in stripped for pattern in question_patterns)
+
+    def _looks_like_courseware_upload(self, content: str) -> bool:
+        if not content:
+            return False
+
+        lowered = content.lower()
+        courseware_markers = (
+            "课件",
+            "课程资料",
+            "讲义",
+            "上传课件",
+            "上传资料",
+            "courseware",
+            "material",
+            "rubric",
+            "评分细则",
+        )
+        return any(marker in lowered for marker in courseware_markers)
+
+    def _looks_like_courseware_file(self, file_name: str | None) -> bool:
+        if not file_name:
+            return False
+
+        lowered = file_name.lower()
+        courseware_file_markers = (
+            "课件",
+            "讲义",
+            "课程",
+            "资料",
+            "chapter",
+            "lecture",
+            "slides",
+            "courseware",
+            "syllabus",
+        )
+        return any(marker in lowered for marker in courseware_file_markers)
 
     def _extract_slots(self, intent: str, content: str) -> Dict[str, Any]:
         slots: Dict[str, Any] = {}

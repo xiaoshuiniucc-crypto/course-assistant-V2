@@ -70,6 +70,7 @@ class Courseware:
     file_path: str
     uploaded_by: str
     created_at: datetime
+    course_id: str = "default"
     meta: Dict = field(default_factory=dict)
 
 
@@ -88,6 +89,7 @@ class Rubric:
     id: str
     title: str
     dimensions: List[RubricDimension]
+    course_id: str = "default"
     total_score: float = 100.0
     hard_rules: List[str] = field(default_factory=list)   # e.g. "迟到扣10分"
     created_at: datetime = field(default_factory=datetime.now)
@@ -105,6 +107,7 @@ class Assignment:
     rubric_id: Optional[str]
     courseware_id: Optional[str]
     deadline: Optional[datetime]
+    course_id: str = "default"
     max_score: float = 100.0
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -118,6 +121,7 @@ class HomeworkSubmission:
     student_name: str
     content: str          # 提交文本
     file_path: Optional[str]
+    course_id: str = "default"
     status: str = SubmitStatus.PENDING
     submitted_at: datetime = field(default_factory=datetime.now)
     score: Optional[float] = None
@@ -182,6 +186,24 @@ class IntentResult:
     session_id: str
     waiting_for: Optional[str] = None   # 多轮对话等待的字段
     slots: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SearchResult:
+    """Lightweight courseware retrieval result."""
+    text: str
+    score: float
+    courseware_id: str
+    chunk_index: int = 0
+    course_id: str = "default"
+    title: str = ""
+
+    def as_reference_text(self, max_len: int = 180) -> str:
+        prefix = self.title or self.courseware_id
+        snippet = self.text.strip().replace("\n", " ")
+        if len(snippet) > max_len:
+            snippet = snippet[:max_len].rstrip() + "..."
+        return f"[{prefix}#{self.chunk_index}] {snippet}"
 
 
 # ─────────────────────────────────────────────

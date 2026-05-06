@@ -55,3 +55,12 @@ Thumbs.db
 mvp/src/data/submissions/*
 mvp/src/data/course_assistant.db
 !mvp/src/data/submissions/.gitkeep
+*.db-shm
+*.db-wal
+reports/
+run_logs/
+botpy.log
+bot_runtime.log
+bot_runtime.err.log
+data/uploads/
+src/runtime/__pycache__/

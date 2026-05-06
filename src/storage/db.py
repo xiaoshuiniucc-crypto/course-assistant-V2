@@ -26,8 +26,16 @@ class DB:
     """统一数据库访问层（SQLite），线程安全，WAL 模式"""
 
     SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS course_groups (
+        course_id TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        group_name TEXT,
+        PRIMARY KEY (course_id, group_id)
+    );
+
     CREATE TABLE IF NOT EXISTS courseware (
         id TEXT PRIMARY KEY,
+        course_id TEXT NOT NULL DEFAULT 'default',
         title TEXT NOT NULL,
         content TEXT NOT NULL,
         file_path TEXT NOT NULL,
@@ -38,6 +46,7 @@ class DB:
 
     CREATE TABLE IF NOT EXISTS rubrics (
         id TEXT PRIMARY KEY,
+        course_id TEXT NOT NULL DEFAULT 'default',
         title TEXT NOT NULL,
         dimensions TEXT NOT NULL,   -- JSON
         total_score REAL DEFAULT 100.0,
@@ -47,6 +56,7 @@ class DB:
 
     CREATE TABLE IF NOT EXISTS assignments (
         id TEXT PRIMARY KEY,
+        course_id TEXT NOT NULL DEFAULT 'default',
         title TEXT NOT NULL,
         description TEXT NOT NULL,
         rubric_id TEXT,
@@ -60,6 +70,7 @@ class DB:
 
     CREATE TABLE IF NOT EXISTS submissions (
         id TEXT PRIMARY KEY,
+        course_id TEXT NOT NULL DEFAULT 'default',
         assignment_id TEXT NOT NULL,
         student_id TEXT NOT NULL,
         student_name TEXT NOT NULL,
@@ -143,6 +154,14 @@ class DB:
 
     CREATE INDEX IF NOT EXISTS idx_submissions_assignment
         ON submissions(assignment_id);
+    CREATE INDEX IF NOT EXISTS idx_courseware_course
+        ON courseware(course_id);
+    CREATE INDEX IF NOT EXISTS idx_rubrics_course
+        ON rubrics(course_id);
+    CREATE INDEX IF NOT EXISTS idx_assignments_course
+        ON assignments(course_id);
+    CREATE INDEX IF NOT EXISTS idx_submissions_course_assignment
+        ON submissions(course_id, assignment_id);
     CREATE INDEX IF NOT EXISTS idx_submissions_student
         ON submissions(student_id);
     CREATE INDEX IF NOT EXISTS idx_appeals_submission
@@ -205,7 +224,22 @@ class DB:
     def _init_schema(self):
         with self._write_lock:
             self._conn.executescript(self.SCHEMA_SQL)
+            self._migrate_schema()
             self._conn.commit()
+
+    def _migrate_schema(self):
+        self._ensure_column("courseware", "course_id", "TEXT NOT NULL DEFAULT 'default'")
+        self._ensure_column("rubrics", "course_id", "TEXT NOT NULL DEFAULT 'default'")
+        self._ensure_column("assignments", "course_id", "TEXT NOT NULL DEFAULT 'default'")
+        self._ensure_column("submissions", "course_id", "TEXT NOT NULL DEFAULT 'default'")
+
+    def _ensure_column(self, table_name: str, column_name: str, column_def: str):
+        columns = self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        if any(column["name"] == column_name for column in columns):
+            return
+        self._conn.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}"
+        )
 
     def close(self):
         """关闭数据库连接"""
@@ -237,11 +271,12 @@ class DB:
     # ── Courseware ──────────────────────────────
 
     def save_courseware(self, cw: Courseware):
+        course_id = getattr(cw, "course_id", "default") or "default"
         self._execute_write(
             "INSERT OR REPLACE INTO courseware"
-            "(id,title,content,file_path,uploaded_by,created_at,meta)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (cw.id, cw.title, cw.content, cw.file_path,
+            "(id,course_id,title,content,file_path,uploaded_by,created_at,meta)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (cw.id, course_id, cw.title, cw.content, cw.file_path,
              cw.uploaded_by, cw.created_at.isoformat(),
              json.dumps(cw.meta, ensure_ascii=False))
         )
@@ -256,12 +291,14 @@ class DB:
             id=row["id"], title=row["title"], content=row["content"],
             file_path=row["file_path"], uploaded_by=row["uploaded_by"],
             created_at=datetime.fromisoformat(row["created_at"]),
+            course_id=row["course_id"] or "default",
             meta=json.loads(row["meta"])
         )
 
     # ── Rubric ──────────────────────────────────
 
     def save_rubric(self, r: Rubric):
+        course_id = getattr(r, "course_id", "default") or "default"
         dims = json.dumps(
             [{"name": d.name, "weight": d.weight,
               "description": d.description, "max_score": d.max_score}
@@ -270,9 +307,9 @@ class DB:
         )
         self._execute_write(
             "INSERT OR REPLACE INTO rubrics"
-            "(id,title,dimensions,total_score,hard_rules,created_at)"
-            " VALUES (?,?,?,?,?,?)",
-            (r.id, r.title, dims, r.total_score,
+            "(id,course_id,title,dimensions,total_score,hard_rules,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (r.id, course_id, r.title, dims, r.total_score,
              json.dumps(r.hard_rules, ensure_ascii=False),
              r.created_at.isoformat())
         )
@@ -292,6 +329,7 @@ class DB:
         ]
         return Rubric(
             id=row["id"], title=row["title"], dimensions=dims,
+            course_id=row["course_id"] or "default",
             total_score=row["total_score"],
             hard_rules=json.loads(row["hard_rules"]),
             created_at=datetime.fromisoformat(row["created_at"])
@@ -300,12 +338,13 @@ class DB:
     # ── Assignment ─────────────────────────────
 
     def save_assignment(self, a: Assignment):
+        course_id = getattr(a, "course_id", "default") or "default"
         self._execute_write(
             "INSERT OR REPLACE INTO assignments"
-            "(id,title,description,rubric_id,courseware_id,"
+            "(id,course_id,title,description,rubric_id,courseware_id,"
             "deadline,max_score,created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (a.id, a.title, a.description, a.rubric_id,
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (a.id, course_id, a.title, a.description, a.rubric_id,
              a.courseware_id,
              a.deadline.isoformat() if a.deadline else None,
              a.max_score, a.created_at.isoformat())
@@ -324,24 +363,32 @@ class DB:
             courseware_id=row["courseware_id"],
             deadline=(datetime.fromisoformat(row["deadline"])
                       if row["deadline"] else None),
+            course_id=row["course_id"] or "default",
             max_score=row["max_score"],
             created_at=datetime.fromisoformat(row["created_at"])
         )
 
-    def list_assignments(self) -> List[Assignment]:
-        rows = self._conn.execute("SELECT * FROM assignments").fetchall()
+    def list_assignments(self, course_id: Optional[str] = None) -> List[Assignment]:
+        if course_id:
+            rows = self._conn.execute(
+                "SELECT * FROM assignments WHERE course_id=?",
+                (course_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute("SELECT * FROM assignments").fetchall()
         return [self.get_assignment(r["id"]) for r in rows]   # type: ignore
 
     # ── Submission ──────────────────────────────
 
     def save_submission(self, s: HomeworkSubmission):
+        course_id = getattr(s, "course_id", "default") or "default"
         self._execute_write(
             "INSERT OR REPLACE INTO submissions"
-            "(id,assignment_id,student_id,student_name,content,"
+            "(id,course_id,assignment_id,student_id,student_name,content,"
             "file_path,status,submitted_at,score,feedback,"
             "graded_at,plagiarized,appeal_status)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (s.id, s.assignment_id, s.student_id, s.student_name,
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (s.id, course_id, s.assignment_id, s.student_id, s.student_name,
              s.content, s.file_path, s.status,
              s.submitted_at.isoformat(),
              s.score, s.feedback,
@@ -360,6 +407,7 @@ class DB:
             student_id=row["student_id"],
             student_name=row["student_name"],
             content=row["content"], file_path=row["file_path"],
+            course_id=row["course_id"] or "default",
             status=row["status"],
             submitted_at=datetime.fromisoformat(row["submitted_at"]),
             score=row["score"], feedback=row["feedback"],
@@ -369,21 +417,41 @@ class DB:
             appeal_status=row["appeal_status"]
         )
 
-    def list_submissions(self, assignment_id: str) -> List[HomeworkSubmission]:
-        rows = self._conn.execute(
-            "SELECT * FROM submissions WHERE assignment_id=?",
-            (assignment_id,)
-        ).fetchall()
+    def list_submissions(
+        self,
+        assignment_id: str,
+        course_id: Optional[str] = None,
+    ) -> List[HomeworkSubmission]:
+        if course_id:
+            rows = self._conn.execute(
+                "SELECT * FROM submissions WHERE assignment_id=? AND course_id=?",
+                (assignment_id, course_id),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM submissions WHERE assignment_id=?",
+                (assignment_id,)
+            ).fetchall()
         return [self.get_submission(r["id"]) for r in rows]   # type: ignore
 
     def get_student_submission(
-        self, assignment_id: str, student_id: str
+        self,
+        assignment_id: str,
+        student_id: str,
+        course_id: Optional[str] = None,
     ) -> Optional[HomeworkSubmission]:
-        row = self._conn.execute(
-            "SELECT * FROM submissions "
-            "WHERE assignment_id=? AND student_id=?",
-            (assignment_id, student_id)
-        ).fetchone()
+        if course_id:
+            row = self._conn.execute(
+                "SELECT * FROM submissions "
+                "WHERE assignment_id=? AND student_id=? AND course_id=?",
+                (assignment_id, student_id, course_id)
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT * FROM submissions "
+                "WHERE assignment_id=? AND student_id=?",
+                (assignment_id, student_id)
+            ).fetchone()
         return self.get_submission(row["id"]) if row else None
 
     # ── Grading Result ─────────────────────────
@@ -460,7 +528,8 @@ class DB:
     # ── Knowledge Chunks ───────────────────────
 
     def save_chunks(self, courseware_id: str,
-                    chunks: List[str], embeddings: List = None):
+                    chunks: List[str], embeddings: List = None,
+                    course_id: str = "default"):
         with self._write_lock:
             # 先删除旧分块
             self._conn.execute(
@@ -475,21 +544,42 @@ class DB:
                     "INSERT INTO knowledge_chunks"
                     "(id,courseware_id,chunk_index,text,embedding)"
                     " VALUES (?,?,?,?,?)",
-                    (f"{courseware_id}_{i}", courseware_id, i, text, emb)
+                    (f"{course_id}_{courseware_id}_{i}", courseware_id, i, text, emb)
                 )
             self._conn.commit()
 
-    def search_chunks(self, query: str, top_k: int = 3) -> List[str]:
+    def search_chunks(self, query: str, top_k: int = 3,
+                      courseware_id: Optional[str] = None) -> List[str]:
         """关键词 fallback 搜索（chromadb 不可用时使用）"""
-        all_rows = self._conn.execute(
-            "SELECT text FROM knowledge_chunks"
-        ).fetchall()
+        if courseware_id:
+            all_rows = self._conn.execute(
+                "SELECT text FROM knowledge_chunks WHERE courseware_id=?",
+                (courseware_id,)
+            ).fetchall()
+        else:
+            all_rows = self._conn.execute(
+                "SELECT text FROM knowledge_chunks"
+            ).fetchall()
         results = []
         query_lower = query.lower()
         for row in all_rows:
             if query_lower in row["text"].lower():
                 results.append(row["text"])
         return results[:top_k]
+
+    def bind_group_to_course(self, course_id: str, group_id: str, group_name: str = ""):
+        self._execute_write(
+            "INSERT OR REPLACE INTO course_groups(course_id,group_id,group_name)"
+            " VALUES (?,?,?)",
+            (course_id, group_id, group_name),
+        )
+
+    def get_course_id_by_group(self, group_id: str) -> Optional[str]:
+        row = self._conn.execute(
+            "SELECT course_id FROM course_groups WHERE group_id=?",
+            (group_id,),
+        ).fetchone()
+        return row["course_id"] if row else None
 
     # ── Session (多轮对话) ─────────────────────
 

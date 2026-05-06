@@ -27,7 +27,8 @@ class RubricParser:
         """解析评分标准文本"""
         dimensions: List[RubricDimension] = []
         hard_rules: List[str] = []
-        lines = text.strip().split("\n")
+        normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = normalized_text.strip().split("\n")
 
         for line in lines:
             line = line.strip()

@@ -22,6 +22,34 @@ from contracts.models import MessageType, QQMessage
 logger = logging.getLogger("qclaw")
 
 
+def _read_secret_from_file(path: str) -> str:
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError as e:
+        logger.warning("Failed to read secret file %s: %s", path, e)
+        return ""
+
+
+def _read_message_attr(source: Any, *names: str) -> Any:
+    """Read a field from either a dict-like object or an attribute object."""
+    if source is None:
+        return None
+
+    for name in names:
+        if isinstance(source, dict) and name in source:
+            value = source.get(name)
+            if value is not None:
+                return value
+        value = getattr(source, name, None)
+        if value is not None:
+            return value
+
+    return None
+
+
 def _convert_botpy_message(msg: Any, msg_type: str = MessageType.PRIVATE) -> QQMessage:
     """Convert a botpy message object into the project's QQMessage."""
     content = getattr(msg, "content", "") or ""
@@ -44,13 +72,8 @@ def _convert_botpy_message(msg: Any, msg_type: str = MessageType.PRIVATE) -> QQM
                 first_attachment, "name", None
             )
 
-    author = getattr(msg, "author", {}) or {}
-    user_id = (
-        author.get("user_openid")
-        or author.get("member_openid")
-        or author.get("id")
-        or "unknown"
-    )
+    author = getattr(msg, "author", None)
+    user_id = _read_message_attr(author, "user_openid", "member_openid", "id") or "unknown"
 
     return QQMessage(
         user_id=str(user_id),
@@ -82,11 +105,18 @@ class QclawAdapter:
         sandbox: bool = False,
     ):
         self.appid = appid or os.environ.get("QQ_APPID", "")
-        self.secret = secret or os.environ.get("QQ_SECRET", "")
+        self.secret = (
+            secret
+            or os.environ.get("QQ_SECRET", "")
+            or _read_secret_from_file(os.environ.get("QQ_SECRET_FILE", ""))
+        )
         self.sandbox = sandbox or os.environ.get("QQ_SANDBOX", "0") == "1"
 
         self._client: Optional[Any] = None
         self._message_handler: Optional[Callable[[QQMessage], Awaitable[None]]] = None
+        self._group_message_handler: Optional[Callable[[QQMessage], Awaitable[None]]] = None
+        self._private_message_handler: Optional[Callable[[QQMessage], Awaitable[None]]] = None
+        self._channel_message_handler: Optional[Callable[[QQMessage], Awaitable[None]]] = None
         self._running = False
         self._injected_messages: List[QQMessage] = []
 
@@ -118,6 +148,21 @@ class QclawAdapter:
                         _convert_botpy_message(message, MessageType.PRIVATE)
                     )
 
+                async def on_friend_add(self, event: Any):
+                    logger.info("Friend add event received: %s", getattr(event, "__dict__", event))
+
+                async def on_c2c_msg_receive(self, event: Any):
+                    logger.info("C2C receive event: %s", getattr(event, "__dict__", event))
+
+                async def on_c2c_msg_reject(self, event: Any):
+                    logger.info("C2C reject event: %s", getattr(event, "__dict__", event))
+
+                async def on_group_msg_receive(self, event: Any):
+                    logger.info("Group receive event: %s", getattr(event, "__dict__", event))
+
+                async def on_group_msg_reject(self, event: Any):
+                    logger.info("Group reject event: %s", getattr(event, "__dict__", event))
+
             return CourseBotClient
         except ImportError:
             logger.warning("qq-botpy is not installed, mock mode will be used.")
@@ -126,9 +171,28 @@ class QclawAdapter:
     def on_message(self, handler: Callable[[QQMessage], Awaitable[None]]):
         self._message_handler = handler
 
+    def on_group_message(self, handler: Callable[[QQMessage], Awaitable[None]]):
+        self._group_message_handler = handler
+
+    def on_private_message(self, handler: Callable[[QQMessage], Awaitable[None]]):
+        self._private_message_handler = handler
+
+    def on_channel_message(self, handler: Callable[[QQMessage], Awaitable[None]]):
+        self._channel_message_handler = handler
+
     async def _dispatch(self, msg: QQMessage):
         logger.info("Received message: user=%s content=%s", msg.user_id, msg.content[:50])
-        if self._message_handler:
+        handled = False
+        if msg.message_type == MessageType.GROUP and self._group_message_handler:
+            await self._group_message_handler(msg)
+            handled = True
+        elif msg.message_type == MessageType.PRIVATE and self._private_message_handler:
+            await self._private_message_handler(msg)
+            handled = True
+        elif msg.message_type == MessageType.CHANNEL and self._channel_message_handler:
+            await self._channel_message_handler(msg)
+            handled = True
+        if not handled and self._message_handler:
             await self._message_handler(msg)
 
     async def start(self):
@@ -152,14 +216,20 @@ class QclawAdapter:
         if hasattr(intents, "direct_message"):
             intents.direct_message = True
 
-        self._client = client_class(intents=intents)
         self._running = True
         logger.info("Qclaw bot starting: appid=%s sandbox=%s", self.appid, self.sandbox)
 
         import threading
 
         def _run_bot():
-            asyncio.run(self._client.run(appid=self.appid, secret=self.secret))
+            try:
+                # Build the bot client inside the worker thread so botpy binds
+                # its internal loop to this thread instead of the main thread.
+                asyncio.set_event_loop(asyncio.new_event_loop())
+                self._client = client_class(intents=intents, is_sandbox=self.sandbox)
+                self._client.run(appid=self.appid, secret=self.secret)
+            except Exception:
+                logger.exception("Qclaw bot thread exited unexpectedly")
 
         self._bot_thread = threading.Thread(target=_run_bot, daemon=True)
         self._bot_thread.start()
@@ -199,6 +269,12 @@ class QclawAdapter:
 
     async def send_group_message(self, group_id: str, content: str):
         await self.send_message(user_id="", content=content, group_id=group_id)
+
+    async def send_private_message(self, user_id: str, content: str):
+        await self.send_message(user_id=user_id, content=content)
+
+    async def send_channel_message(self, channel_id: str, content: str):
+        await self.send_group_message(channel_id, content)
 
     async def download_file(
         self,
@@ -271,6 +347,15 @@ class QclawAdapter:
                     if uid == user_id:
                         return [role.strip()]
         return ["member"]
+
+    async def get_group_members(self, group_id: str) -> List[dict]:
+        if self._client and hasattr(self._client.api, "get_group_members"):
+            try:
+                members = await self._client.api.get_group_members(group_openid=group_id)
+                return list(members or [])
+            except Exception as e:
+                logger.warning("Failed to fetch group members: %s", e)
+        return []
 
     def _infer_roles_from_identity(self, group_id: str, user_id: str) -> List[str]:
         configured_teacher_ids = {
