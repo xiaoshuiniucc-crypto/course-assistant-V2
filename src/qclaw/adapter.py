@@ -149,24 +149,30 @@ class QclawAdapter:
         import botpy
 
         intents = botpy.Intents.none()
-        intents.public_guild_messages = True       # 频道消息
-        intents.public_guild_messages = True       # 频道私信（同属 public_guild_messages intent）
-        # 群聊和C2C需要在QQ开放平台申请权限后启用
-        # 申请到权限后取消注释以下行:
-        # intents.group_and_c2c_events = True       # 群聊@ + C2C私聊
+        intents.public_guild_messages = True   # 频道 @消息
+        intents.direct_message = True          # 频道私信
+        intents.public_messages = True         # 群聊@ + C2C私聊（botpy 1.2.1 对应字段）
 
         self._client = ClientClass(intents=intents)
 
-        # 在后台运行 bot
+        # 在后台运行 bot（独立线程 + 独立事件循环，避免与主线程冲突）
         self._running = True
         logger.info(f"Qclaw Bot 启动: appid={self.appid}")
 
-        # client.run() 是阻塞的，在独立线程中运行
         import threading
         def _run_bot():
-            asyncio.run(
-                self._client.run(appid=self.appid, secret=self.secret)
-            )
+            # 为该线程创建新的事件循环
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                self._client.loop = loop
+                loop.run_until_complete(
+                    self._client.start(appid=self.appid, secret=self.secret)
+                )
+            except Exception as e:
+                logger.error(f"Bot 线程异常: {e}", exc_info=True)
+            finally:
+                loop.close()
 
         self._bot_thread = threading.Thread(target=_run_bot, daemon=True)
         self._bot_thread.start()
@@ -193,14 +199,16 @@ class QclawAdapter:
                 if group_id:
                     await self._client.api.post_group_message(
                         group_openid=group_id,
-                        content=content,
                         msg_type=0,  # 文本
+                        content=content,
+                        msg_seq=int(datetime.now().timestamp()),
                     )
                 else:
                     await self._client.api.post_c2c_message(
                         openid=user_id,
-                        content=content,
                         msg_type=0,
+                        content=content,
+                        msg_seq=int(datetime.now().timestamp()),
                     )
                 logger.info(f"消息已发送: user={user_id}, len={len(content)}")
             except Exception as e:
