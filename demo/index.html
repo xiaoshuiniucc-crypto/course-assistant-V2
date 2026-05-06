@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q-Tutor — QQ课程AI助手</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-cyan: #22d3ee;
+            --accent-emerald: #34d399;
+            --accent-amber: #fbbf24;
+            --accent-rose: #fb7185;
+            --accent-purple: #a78bfa;
+            --accent-blue: #60a5fa;
+            --border: #334155;
+        }
+
+        body {
+            font-family: 'Noto Sans SC', 'JetBrains Mono', sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* 滚动条美化 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-dark);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+
+        /* 导航栏 */
+        .navbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 40px;
+            z-index: 1000;
+        }
+
+        .navbar-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .navbar-logo {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+
+        .navbar-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .navbar-links {
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 6px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+
+        /* 英雄区 */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 100px 40px 60px;
+            background: 
+                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34, 211, 238, 0.15), transparent),
+                radial-gradient(ellipse 60% 40% at 80% 60%, rgba(167, 139, 250, 0.1), transparent),
+                var(--bg-dark);
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(34, 211, 238, 0.1);
+            border: 1px solid rgba(34, 211, 238, 0.3);
+            border-radius: 20px;
+            font-size: 13px;
+            color: var(--accent-cyan);
+            margin-bottom: 24px;
+        }
+
+        .hero-badge-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--accent-cyan);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .hero h1 {
+            font-size: clamp(36px, 6vw, 64px);
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-cyan) 50%, var(--accent-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 20px;
+            letter-spacing: -1px;
+        }
+
+        .hero-subtitle {
+            font-size: 18px;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin-bottom: 40px;
+        }
+
+        .hero-actions {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+            color: var(--bg-dark);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(34, 211, 238, 0.3);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--text-muted);
+        }
+
+        /* 功能卡片网格 */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--accent-cyan);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .feature-card.active {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.2);
+        }
+
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 16px;
+        }
+
+        .feature-icon.teacher { background: rgba(34, 211, 238, 0.15); }
+        .feature-icon.student { background: rgba(52, 211, 153, 0.15); }
+        .feature-icon.appeal { background: rgba(251, 113, 133, 0.15); }
+        .feature-icon.qa { background: rgba(251, 191, 36, 0.15); }
+
+        .feature-card h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .feature-card p {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        /* 流程演示区 */
+        .demo-section {
+            padding: 80px 40px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .section-header h2 {
+            font-size: 32px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .section-header p {
+            color: var(--text-secondary);
+            font-size: 16px;
+        }
+
+        /* 流程切换标签 */
+        .flow-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 32px;
+            flex-wrap: wrap;
+        }
+
+        .flow-tab {
+            padding: 10px 20px;
+            border-radius: 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .flow-tab:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+
+        .flow-tab.active {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            border-color: transparent;
+            color: var(--bg-dark);
+            font-weight: 500;
+        }
+
+        /* 流程演示容器 */
+        .flow-demo {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+            align-items: start;
+        }
+
+        @media (max-width: 900px) {
+            .flow-demo {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 聊天模拟器 */
+        .chat-simulator {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            padding: 16px 20px;
+            background: rgba(30, 41, 59, 0.8);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .chat-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .chat-info h4 {
+            font-size: 15px;
+            font-weight: 500;
+        }
+
+        .chat-info span {
+            font-size: 12px;
+            color: var(--accent-emerald);
+        }
+
+        .chat-messages {
+            height: 450px;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .chat-message {
+            display: flex;
+            gap: 10px;
+            animation: messageIn 0.3s ease-out;
+        }
+
+        @keyframes messageIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .chat-message.user {
+            flex-direction: row-reverse;
+        }
+
+        .chat-message .avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .chat-message.bot .avatar {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+        }
+
+        .chat-message.user .avatar {
+            background: var(--accent-emerald);
+        }
+
+        .chat-message.ta .avatar {
+            background: var(--accent-rose);
+        }
+
+        .message-bubble {
+            max-width: 75%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .chat-message.bot .message-bubble {
+            background: rgba(51, 65, 85, 0.5);
+            border: 1px solid var(--border);
+            border-top-left-radius: 4px;
+        }
+
+        .chat-message.user .message-bubble {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+            color: var(--bg-dark);
+            border-top-right-radius: 4px;
+        }
+
+        .chat-message.ta .message-bubble {
+            background: rgba(251, 113, 133, 0.2);
+            border: 1px solid rgba(251, 113, 133, 0.3);
+            border-top-left-radius: 4px;
+        }
+
+        .message-time {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+            text-align: right;
+        }
+
+        .message-bubble code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .message-bubble .score-display {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 8px;
+        }
+
+        .score-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .score-row:last-child {
+            border-bottom: none;
+        }
+
+        .score-total {
+            font-weight: 600;
+            color: var(--accent-amber);
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255,255,255,0.2);
+        }
+
+        /* 流程步骤说明 */
+        .flow-steps {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+        }
+
+        .flow-steps h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .flow-step {
+            display: flex;
+            gap: 16px;
+            padding: 16px;
+            border-radius: 10px;
+            margin-bottom: 12px;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid transparent;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .flow-step:hover, .flow-step.active {
+            background: var(--bg-card-hover);
+            border-color: var(--accent-cyan);
+        }
+
+        .flow-step.active {
+            box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.2);
+        }
+
+        .step-number {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            color: var(--bg-dark);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .step-content h4 {
+            font-size: 15px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .step-content p {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .step-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+            margin-top: 6px;
+        }
+
+        .step-tag.ai { background: rgba(251, 191, 36, 0.2); color: var(--accent-amber); }
+        .step-tag.teacher { background: rgba(34, 211, 238, 0.2); color: var(--accent-cyan); }
+        .step-tag.student { background: rgba(52, 211, 153, 0.2); color: var(--accent-emerald); }
+        .step-tag.ta { background: rgba(251, 113, 133, 0.2); color: var(--accent-rose); }
+        .step-tag.data { background: rgba(167, 139, 250, 0.2); color: var(--accent-purple); }
+
+        /* 技术架构 */
+        .architecture {
+            padding: 80px 40px;
+            background: 
+                radial-gradient(ellipse 60% 40% at 20% 50%, rgba(34, 211, 238, 0.08), transparent),
+                radial-gradient(ellipse 60% 40% at 80% 50%, rgba(167, 139, 250, 0.08), transparent),
+                var(--bg-dark);
+        }
+
+        .arch-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .arch-module {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s;
+        }
+
+        .arch-module:hover {
+            transform: translateY(-4px);
+            border-color: var(--accent-purple);
+        }
+
+        .arch-module h4 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .arch-module p {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .arch-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            background: rgba(34, 211, 238, 0.2);
+            color: var(--accent-cyan);
+        }
+
+        /* 核心技术 */
+        .tech-stack {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 48px;
+        }
+
+        .tech-item {
+            padding: 10px 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .tech-item span:first-child {
+            font-size: 18px;
+        }
+
+        /* 页脚 */
+        .footer {
+            padding: 40px;
+            text-align: center;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        /* 进度条 */
+        .progress-bar {
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+            border-radius: 2px;
+            transition: width 0.3s;
+        }
+
+        /* 动画效果 */
+        .fade-in {
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* 模拟typing效果 */
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 8px;
+        }
+
+        .typing-indicator span {
+            width: 6px;
+            height: 6px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+            30% { transform: translateY(-4px); opacity: 1; }
+        }
+
+        /* 对话模拟控制 */
+        .sim-controls {
+            padding: 16px 20px;
+            background: rgba(30, 41, 59, 0.8);
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 8px;
+        }
+
+        .sim-btn {
+            flex: 1;
+            padding: 10px;
+            border-radius: 6px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .sim-btn:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--accent-cyan);
+        }
+
+        .sim-btn.primary {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            border: none;
+            color: var(--bg-dark);
+            font-weight: 500;
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .navbar {
+                padding: 0 20px;
+            }
+            .hero {
+                padding: 80px 20px 40px;
+            }
+            .demo-section {
+                padding: 40px 20px;
+            }
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="navbar-brand">
+            <div class="navbar-logo">📚</div>
+            <span class="navbar-title">Q-Tutor</span>
+        </div>
+        <div class="navbar-links">
+            <a class="nav-link active" onclick="scrollToSection('hero')">首页</a>
+            <a class="nav-link" onclick="scrollToSection('flows')">流程演示</a>
+            <a class="nav-link" onclick="scrollToSection('architecture')">架构</a>
+        </div>
+    </nav>
+
+    <!-- 英雄区 -->
+    <section class="hero" id="hero">
+        <div class="hero-badge">
+            <span class="hero-badge-dot"></span>
+            基于 QQ 生态的智能作业批改系统
+        </div>
+        <h1>Q-Tutor</h1>
+        <p class="hero-subtitle">
+            QQ课程AI助手 · 智能作业批改<br>
+            自动化作业批改 · 智能问答辅导 · 申诉审批管理<br>
+            让教师专注教学，让学生高效学习
+        </p>
+        <div class="hero-actions">
+            <button class="btn btn-primary" onclick="scrollToSection('flows')">
+                🚀 体验交互演示
+            </button>
+            <a class="btn btn-secondary" href="https://github.com/xiaoshuiniucc-crypto/course-assistant-V2" target="_blank">
+                📦 查看源码
+            </a>
+        </div>
+    </section>
+
+    <!-- 功能概览 -->
+    <section class="demo-section">
+        <div class="section-header">
+            <h2>🎯 核心功能</h2>
+            <p>四大核心流程，覆盖课程教学全场景</p>
+        </div>
+        <div class="features-grid">
+            <div class="feature-card" onclick="switchFlow(0)">
+                <div class="feature-icon teacher">👨‍🏫</div>
+                <h3>教师配置作业</h3>
+                <p>上传课件、评分细则、作业要求，系统自动解析入库</p>
+                <div class="progress-bar"><div class="progress-fill" style="width: 100%"></div></div>
+            </div>
+            <div class="feature-card" onclick="switchFlow(1)">
+                <div class="feature-icon student">👨‍🎓</div>
+                <h3>学生提交作业</h3>
+                <p>私聊提交、AI自动批改、即时获取评分与反馈</p>
+                <div class="progress-bar"><div class="progress-fill" style="width: 100%"></div></div>
+            </div>
+            <div class="feature-card" onclick="switchFlow(2)">
+                <div class="feature-icon appeal">📝</div>
+                <h3>智能申诉处理</h3>
+                <p>AI自动重评、助教审批、结果通知全自动化</p>
+                <div class="progress-bar"><div class="progress-fill" style="width: 85%"></div></div>
+            </div>
+            <div class="feature-card" onclick="switchFlow(3)">
+                <div class="feature-icon qa">💬</div>
+                <h3>课件智能问答</h3>
+                <p>群内@提问、AI检索课件、精准回答课程问题</p>
+                <div class="progress-bar"><div class="progress-fill" style="width: 70%"></div></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 交互演示区 -->
+    <section class="demo-section" id="flows">
+        <div class="section-header">
+            <h2>💬 交互演示</h2>
+            <p>点击「下一步」体验完整的对话流程</p>
+        </div>
+
+        <!-- 流程切换 -->
+        <div class="flow-tabs">
+            <button class="flow-tab active" onclick="switchFlow(0)">流程一：教师配置</button>
+            <button class="flow-tab" onclick="switchFlow(1)">流程二：学生提交</button>
+            <button class="flow-tab" onclick="switchFlow(2)">流程三：申诉处理</button>
+            <button class="flow-tab" onclick="switchFlow(3)">流程四：智能问答</button>
+        </div>
+
+        <!-- 流程演示 -->
+        <div class="flow-demo">
+            <!-- 聊天模拟器 -->
+            <div class="chat-simulator">
+                <div class="chat-header">
+                    <div class="chat-avatar" style="background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));">
+                        🤖
+                    </div>
+                    <div class="chat-info">
+                        <h4>Q-Tutor 智能助教</h4>
+                        <span>● 在线</span>
+                    </div>
+                </div>
+                <div class="chat-messages" id="chatMessages">
+                    <!-- 消息将动态插入 -->
+                </div>
+                <div class="sim-controls">
+                    <button class="sim-btn" onclick="resetFlow()">🔄 重置</button>
+                    <button class="sim-btn primary" onclick="nextStep()">▶️ 下一步</button>
+                </div>
+            </div>
+
+            <!-- 流程步骤 -->
+            <div class="flow-steps">
+                <h3 id="flowTitle">📋 流程步骤</h3>
+                <div id="flowStepsList">
+                    <!-- 步骤将动态插入 -->
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 技术架构 -->
+    <section class="architecture" id="architecture">
+        <div class="section-header">
+            <h2>🏗️ 技术架构</h2>
+            <p>模块化设计，职责清晰，易于扩展</p>
+        </div>
+        <div class="arch-grid">
+            <div class="arch-module">
+                <h4><span class="arch-badge">M01</span> Qclaw 接入层</h4>
+                <p>系统与QQ的唯一通信入口，负责所有消息的收发、文件下载</p>
+            </div>
+            <div class="arch-module">
+                <h4><span class="arch-badge">M02</span> 意图识别路由</h4>
+                <p>解析用户消息，识别操作意图，管理多轮会话状态</p>
+            </div>
+            <div class="arch-module">
+                <h4><span class="arch-badge">M03</span> 文件解析引擎</h4>
+                <p>统一解析 docx/pdf/zip/代码文件为纯文本和结构化元数据</p>
+            </div>
+            <div class="arch-module">
+                <h4><span class="arch-badge">M04</span> 评分细则解析</h4>
+                <p>将评分规则文档解析为结构化配置，支持版本管理</p>
+            </div>
+            <div class="arch-module">
+                <h4><span class="arch-badge">M05</span> 知识库管理</h4>
+                <p>课件向量化存储与检索，RAG检索支持智能问答</p>
+            </div>
+            <div class="arch-module">
+                <h4><span class="arch-badge">M07</span> AI 批改引擎</h4>
+                <p>系统核心，结合知识库和评分细则输出结构化批改结果</p>
+            </div>
+            <div class="arch-module">
+                <h4><span class="arch-badge">M11</span> 申诉处理</h4>
+                <p>管理申诉生命周期：AI重评 → 助教审批 → 结果通知</p>
+            </div>
+            <div class="arch-module">
+                <h4><span class="arch-badge">M12</span> PDF 报告生成</h4>
+                <p>按需生成详细批改报告，含得分点、扣分点、课件依据</p>
+            </div>
+        </div>
+
+        <div class="tech-stack">
+            <div class="tech-item"><span>🤖</span> Qclaw SDK</div>
+            <div class="tech-item"><span>🧠</span> DeepSeek API</div>
+            <div class="tech-item"><span>📚</span> ChromaDB</div>
+            <div class="tech-item"><span>💾</span> SQLite</div>
+            <div class="tech-item"><span>🔍</span> RAG 检索</div>
+            <div class="tech-item"><span>🎯</span> 意图识别</div>
+            <div class="tech-item"><span>📐</span> 向量嵌入</div>
+        </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer class="footer">
+        <p>Q-Tutor — 基于 QQ 生态的智能作业批改系统</p>
+        <p style="margin-top: 8px;">Powered by DeepSeek · Qclaw SDK · ChromaDB</p>
+    </footer>
+
+    <script>
+        // 流程数据定义
+        const flowsData = [
+            {
+                title: "📋 流程一：教师配置作业",
+                steps: [
+                    { title: "上传课件文件", desc: "教师在群内发送课件文件 + #课件 标签", tag: "teacher", tagText: "教师操作" },
+                    { title: "AI 解析入库", desc: "系统自动解析文件并向量化存储到知识库", tag: "ai", tagText: "AI处理" },
+                    { title: "上传评分细则", desc: "教师发送评分细则文档 + #评分细则 标签", tag: "teacher", tagText: "教师操作" },
+                    { title: "AI 解析配置", desc: "系统解析评分规则并存储到数据库", tag: "ai", tagText: "AI处理" },
+                    { title: "发布作业要求", desc: "教师发送作业要求 + #作业要求 创建作业", tag: "teacher", tagText: "教师操作" }
+                ],
+                messages: [
+                    { type: "user", avatar: "👨‍🏫", text: "上传课件文件 + #课件", time: "10:00" },
+                    { type: "bot", avatar: "🤖", text: "已收到课件文件，正在解析并向量化存储...", time: "10:00" },
+                    { type: "bot", avatar: "🤖", text: "✅ 课件解析完成！已入库 156 个知识片段" },
+                    { type: "user", avatar: "👨‍🏫", text: "上传评分细则 + #评分细则", time: "10:02" },
+                    { type: "bot", avatar: "🤖", text: "已收到评分细则，正在解析评分规则...", time: "10:02" },
+                    { type: "bot", avatar: "🤖", text: "✅ 评分细则解析完成！包含 5 个评分维度，总分 100 分" },
+                    { type: "user", avatar: "👨‍🏫", text: "上传作业要求 + #作业要求", time: "10:05" },
+                    { type: "bot", avatar: "🤖", text: "已收到作业要求，正在创建作业...", time: "10:05" },
+                    { type: "bot", avatar: "🤖", text: "✅ 作业「数据库系统设计」创建成功！\n截止时间：本周五 23:59" }
+                ]
+            },
+            {
+                title: "📋 流程二：学生提交作业",
+                steps: [
+                    { title: "私聊发送文件", desc: "学生私聊机器人发送作业文件", tag: "student", tagText: "学生操作" },
+                    { title: "询问归属课程", desc: "机器人自动询问学生选择对应课程", tag: "ai", tagText: "AI处理" },
+                    { title: "作业归档存储", desc: "文件存储到对应课程的作业目录", tag: "data", tagText: "数据存储" },
+                    { title: "AI 批改处理", desc: "结合课件、细则进行智能评分", tag: "ai", tagText: "AI处理" },
+                    { title: "发送批改结果", desc: "私信发送总分、扣分点、申诉入口", tag: "student", tagText: "通知学生" }
+                ],
+                messages: [
+                    { type: "user", avatar: "👨‍🎓", text: "[发送文件] 数据库设计报告.docx", time: "14:30" },
+                    { type: "bot", avatar: "🤖", text: "已收到您的作业文件！请选择归属课程：\n1. 数据库系统\n2. 软件工程\n3. 数据结构", time: "14:30" },
+                    { type: "user", avatar: "👨‍🎓", text: "1", time: "14:31" },
+                    { type: "bot", avatar: "🤖", text: "正在归档并启动AI批改...", time: "14:31" },
+                    { type: "bot", avatar: "🤖", text: "✅ 批改完成！\n\n<div class='score-display'><div class='score-row'><span>问题分析</span><span>24/30</span></div><div class='score-row'><span>ER模型设计</span><span>18/20</span></div><div class='score-row'><span>规范化处理</span><span>12/15</span></div><div class='score-row'><span>文档规范</span><span>14/15</span></div><div class='score-row'><span>代码实现</span><span>12/20</span></div><div class='score-row score-total'><span>总分</span><span>80/100</span></div></div>\n\n📝 主要扣分：第5题代码实现缺少异常处理\n💬 如有异议，回复「申诉」并说明理由", time: "14:32" }
+                ]
+            },
+            {
+                title: "📋 流程三：申诉处理",
+                steps: [
+                    { title: "学生发起申诉", desc: "学生回复「申诉 + 理由」提交申请", tag: "student", tagText: "学生操作" },
+                    { title: "AI 自动重评", desc: "检索课件、重新评分，生成变更说明", tag: "ai", tagText: "AI处理" },
+                    { title: "推送助教频道", desc: "群机器人推送申诉通知给助教", tag: "ta", tagText: "助教操作" },
+                    { title: "助教审批决策", desc: "助教回复「同意」或「驳回+原因」", tag: "ta", tagText: "助教操作" },
+                    { title: "通知学生结果", desc: "私信通知学生最终审批结果", tag: "student", tagText: "通知学生" }
+                ],
+                messages: [
+                    { type: "user", avatar: "👨‍🎓", text: "申诉 第5题我认为我的异常处理是对的，请重新评估", time: "15:00" },
+                    { type: "bot", avatar: "🤖", text: "已收到您的申诉请求，正在进行AI自动重评...", time: "15:00" },
+                    { type: "bot", avatar: "🤖", text: "✅ AI重评完成！\n\n📊 变更详情：\n• 第5题：12分 → 16分 (+4分)\n• 变更原因：学生代码中包含try-catch块，符合课件P45的异常处理规范", time: "15:01" },
+                    { type: "bot", avatar: "🤖", text: "📢 【申诉待审】学生 张三 | 数据库系统 - 设计报告\n原分：80 → AI重评：84（+4分）\n申诉理由：第5题异常处理评估有误\n变更说明：代码包含try-catch，符合规范\n\n回复「同意」或「1」→ 批准\n回复「驳回 + 原因」→ 驳回", time: "15:02" },
+                    { type: "ta", avatar: "👩‍🏫", text: "同意", time: "15:30" },
+                    { type: "bot", avatar: "🤖", text: "✅ 申诉已批准！\n\n📊 最终成绩：80 → 84 分\n\n已通过私信通知学生。", time: "15:30" },
+                    { type: "bot", avatar: "🤖", text: "📬 【申诉结果通知】\n您的申诉已获批准！\n最终得分：84/100（+4分）\n\n👍 批准原因：代码异常处理符合规范", time: "15:31" }
+                ]
+            },
+            {
+                title: "📋 流程四：智能问答",
+                steps: [
+                    { title: "群内@提问", desc: "学生在群内 @机器人 提问课程问题", tag: "student", tagText: "学生操作" },
+                    { title: "意图识别路由", desc: "系统识别为 ASK_QUESTION 意图", tag: "ai", tagText: "AI处理" },
+                    { title: "RAG 检索", desc: "从知识库检索相关课件内容", tag: "data", tagText: "数据检索" },
+                    { title: "AI 生成回答", desc: "结合课件原文生成精准回答", tag: "ai", tagText: "AI处理" },
+                    { title: "群内回复学生", desc: "引用课件依据进行回答", tag: "student", tagText: "回复学生" }
+                ],
+                messages: [
+                    { type: "user", avatar: "👨‍🎓", text: "@课程助手 第三章ER模型的设计步骤是什么？", time: "16:00" },
+                    { type: "bot", avatar: "🤖", text: "正在分析您的问题...", time: "16:00" },
+                    { type: "bot", avatar: "🤖", text: "🔍 检索到相关课件内容，正在生成回答...", time: "16:00" },
+                    { type: "bot", avatar: "🤖", text: "根据第3章-ER模型设计.pptx，ER模型设计步骤如下：\n\n**1. 实体识别**\n识别问题域中的主要对象，如学生、课程、教师等。\n📖 课件P12：「实体是现实世界中可以区别于其他对象的『事物』」\n\n**2. 属性分析**\n确定每个实体的属性及其类型。\n📖 课件P15：「属性分为简单属性和复合属性」\n\n**3. 联系确定**\n识别实体之间的关系（一对一、一对多、多对多）。\n📖 课件P23：「用菱形表示实体间的联系」\n\n**4. ER图绘制**\n将实体、属性、联系绘制成完整的ER图。\n📖 课件P28：「遵循『先实体后联系』的绘制顺序」\n\n如需更详细的讲解，可以查看课件第3章完整内容~", time: "16:01" }
+                ]
+            }
+        ];
+
+        let currentFlow = 0;
+        let currentStep = 0;
+
+        // 初始化
+        function init() {
+            renderFlow();
+        }
+
+        // 切换流程
+        function switchFlow(index) {
+            currentFlow = index;
+            currentStep = 0;
+            renderFlow();
+            
+            // 更新标签状态
+            document.querySelectorAll('.flow-tab').forEach((tab, i) => {
+                tab.classList.toggle('active', i === index);
+            });
+            
+            // 滚动到演示区
+            scrollToSection('flows');
+        }
+
+        // 渲染当前流程
+        function renderFlow() {
+            const flow = flowsData[currentFlow];
+            document.getElementById('flowTitle').textContent = flow.title;
+            
+            // 渲染步骤
+            const stepsList = document.getElementById('flowStepsList');
+            stepsList.innerHTML = flow.steps.map((step, i) => `
+                <div class="flow-step ${i === 0 ? 'active' : ''}" data-index="${i}">
+                    <div class="step-number">${i + 1}</div>
+                    <div class="step-content">
+                        <h4>${step.title}</h4>
+                        <p>${step.desc}</p>
+                        <span class="step-tag ${step.tag}">${step.tagText}</span>
+                    </div>
+                </div>
+            `).join('');
+            
+            // 渲染消息
+            renderMessages();
+        }
+
+        // 渲染消息
+        function renderMessages() {
+            const flow = flowsData[currentFlow];
+            const container = document.getElementById('chatMessages');
+            
+            // 计算要显示的消息数量
+            const messagesToShow = Math.min(currentStep * 2 + 1, flow.messages.length);
+            
+            container.innerHTML = flow.messages.slice(0, messagesToShow).map(msg => {
+                const typeClass = msg.type === 'bot' ? 'bot' : (msg.type === 'ta' ? 'ta' : 'user');
+                return `
+                    <div class="chat-message ${typeClass}">
+                        <div class="avatar">${msg.avatar}</div>
+                        <div>
+                            <div class="message-bubble">${msg.text}</div>
+                            ${msg.time ? `<div class="message-time">${msg.time}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            // 滚动到底部
+            container.scrollTop = container.scrollHeight;
+            
+            // 更新步骤高亮
+            updateStepHighlight();
+        }
+
+        // 更新步骤高亮
+        function updateStepHighlight() {
+            const flow = flowsData[currentFlow];
+            const activeIndex = Math.floor((currentStep * 2) / 2);
+            
+            document.querySelectorAll('.flow-step').forEach((step, i) => {
+                step.classList.toggle('active', i <= activeIndex && i < flow.steps.length);
+            });
+        }
+
+        // 下一步
+        function nextStep() {
+            const flow = flowsData[currentFlow];
+            if (currentStep * 2 + 1 < flow.messages.length) {
+                currentStep++;
+                renderMessages();
+            }
+        }
+
+        // 重置
+        function resetFlow() {
+            currentStep = 0;
+            renderFlow();
+        }
+
+        // 滚动到指定区域
+        function scrollToSection(id) {
+            document.getElementById(id).scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
