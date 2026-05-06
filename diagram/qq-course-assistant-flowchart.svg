@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1800" width="1200" height="1800">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 2000" width="1200" height="2000">
   <defs>
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
-    </pattern>
     <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
       <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
     </marker>
@@ -27,7 +24,6 @@
 
   <!-- Background -->
   <rect width="100%" height="100%" fill="#0f172a"/>
-  <rect width="100%" height="100%" fill="url(#grid)"/>
 
   <!-- Title -->
   <text x="60" y="40" fill="white" font-size="18" font-weight="700">QQ课程AI助手 - 核心交互流程图</text>
@@ -47,7 +43,7 @@
   <rect x="1050" y="88" width="16" height="16" rx="3" fill="rgba(136,19,55,0.6)" stroke="#fb7185" stroke-width="1.5"/>
   <text x="1075" y="100" fill="#94a3b8" font-size="9">助教操作</text>
 
-  <!-- ========== 流程一：教师配置作业 ========== -->
+  <!-- ========== 流程一：教师配置作业 (y: 150-820) ========== -->
   <rect x="50" y="150" width="500" height="30" rx="6" fill="rgba(8,51,68,0.3)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="4,2"/>
   <text x="70" y="170" fill="#22d3ee" font-size="11" font-weight="600">流程一：教师配置作业</text>
 
@@ -55,20 +51,20 @@
   <rect x="250" y="195" width="60" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
   <text x="280" y="215" fill="white" font-size="10" font-weight="600" text-anchor="middle">教师</text>
 
-  <!-- Step 1: 上传课件 -->
+  <!-- Step1: 上传课件 -->
   <line x1="280" y1="225" x2="280" y2="250" stroke="#22d3ee" marker-end="url(#arrow-cyan)"/>
   <rect x="180" y="250" width="200" height="45" rx="6" fill="#0f172a"/>
   <rect x="180" y="250" width="200" height="45" rx="6" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1.5"/>
   <text x="280" y="272" fill="white" font-size="10" font-weight="600" text-anchor="middle">上传课件文件 + #课件</text>
   <text x="280" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">发送带标签的课件文件</text>
 
-  <!-- Step 2: 解析入库 -->
+  <!-- Step2: 解析入库 -->
   <line x1="280" y1="295" x2="280" y2="320" stroke="#22d3ee" marker-end="url(#arrow-cyan)"/>
   <rect x="180" y="320" width="200" height="40" rx="6" fill="#0f172a"/>
   <rect x="180" y="320" width="200" height="40" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
   <text x="280" y="343" fill="white" font-size="10" font-weight="600" text-anchor="middle">AI 解析文件并向量化</text>
 
-  <!-- Database -->
+  <!-- Database: 知识库 -->
   <line x1="280" y1="360" x2="280" y2="385" stroke="#a78bfa" marker-end="url(#arrow)"/>
   <g transform="translate(215, 385)">
     <ellipse cx="65" cy="8" rx="65" ry="12" fill="#0f172a"/>
@@ -81,20 +77,20 @@
     <text x="65" y="35" fill="white" font-size="10" font-weight="600" text-anchor="middle">知识库</text>
   </g>
 
-  <!-- Step 3: 上传评分细则 -->
+  <!-- Step3: 上传评分细则 -->
   <line x1="280" y1="453" x2="280" y2="478" stroke="#22d3ee" marker-end="url(#arrow-cyan)"/>
   <rect x="180" y="478" width="200" height="45" rx="6" fill="#0f172a"/>
   <rect x="180" y="478" width="200" height="45" rx="6" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1.5"/>
   <text x="280" y="500" fill="white" font-size="10" font-weight="600" text-anchor="middle">上传评分细则 + #评分细则</text>
   <text x="280" y="515" fill="#94a3b8" font-size="8" text-anchor="middle">发送评分规则文档</text>
 
-  <!-- Step 4: 解析配置 -->
+  <!-- Step4: 解析配置 -->
   <line x1="280" y1="523" x2="280" y2="548" stroke="#22d3ee" marker-end="url(#arrow-cyan)"/>
   <rect x="180" y="548" width="200" height="40" rx="6" fill="#0f172a"/>
   <rect x="180" y="548" width="200" height="40" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
   <text x="280" y="571" fill="white" font-size="10" font-weight="600" text-anchor="middle">AI 解析评分规则并存储</text>
 
-  <!-- Database 2 -->
+  <!-- Database: SQLite -->
   <line x1="280" y1="588" x2="280" y2="613" stroke="#a78bfa" marker-end="url(#arrow)"/>
   <g transform="translate(215, 613)">
     <ellipse cx="65" cy="8" rx="65" ry="12" fill="#0f172a"/>
@@ -107,7 +103,7 @@
     <text x="65" y="35" fill="white" font-size="10" font-weight="600" text-anchor="middle">SQLite</text>
   </g>
 
-  <!-- Step 5: 发布作业 -->
+  <!-- Step5: 发布作业 -->
   <line x1="280" y1="681" x2="280" y2="706" stroke="#22d3ee" marker-end="url(#arrow-cyan)"/>
   <rect x="180" y="706" width="200" height="45" rx="6" fill="#0f172a"/>
   <rect x="180" y="706" width="200" height="45" rx="6" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1.5"/>
@@ -119,7 +115,7 @@
   <rect x="235" y="780" width="90" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
   <text x="280" y="800" fill="white" font-size="10" font-weight="600" text-anchor="middle">配置完成</text>
 
-  <!-- ========== 流程二：学生提交作业 ========== -->
+  <!-- ========== 流程二：学生提交作业 (y: 150-920) ========== -->
   <rect x="600" y="150" width="550" height="30" rx="6" fill="rgba(6,78,59,0.3)" stroke="#34d399" stroke-width="1" stroke-dasharray="4,2"/>
   <text x="620" y="170" fill="#34d399" font-size="11" font-weight="600">流程二：学生提交作业</text>
 
@@ -127,40 +123,40 @@
   <rect x="825" y="195" width="60" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
   <text x="855" y="215" fill="white" font-size="10" font-weight="600" text-anchor="middle">学生</text>
 
-  <!-- Step 1: 私聊发送文件 -->
+  <!-- Step1: 私聊发送文件 -->
   <line x1="855" y1="225" x2="855" y2="250" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
   <rect x="730" y="250" width="250" height="45" rx="6" fill="#0f172a"/>
   <rect x="730" y="250" width="250" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
   <text x="855" y="272" fill="white" font-size="10" font-weight="600" text-anchor="middle">私聊机器人发送作业文件</text>
   <text x="855" y="287" fill="#94a3b8" font-size="8" text-anchor="middle">避免群消息污染</text>
 
-  <!-- Step 2: 询问归属 -->
+  <!-- Step2: 询问归属 -->
   <line x1="855" y1="295" x2="855" y2="320" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
   <rect x="730" y="320" width="250" height="40" rx="6" fill="#0f172a"/>
   <rect x="730" y="320" width="250" height="40" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
   <text x="855" y="343" fill="white" font-size="10" font-weight="600" text-anchor="middle">机器人询问归属课程</text>
 
   <!-- Decision: 选择课程 -->
-  <line x1="855" y1="360" x2="855" y2="385" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-  <g transform="translate(855, 410)">
+  <line x1="855" y1="360" x2="855" y2="390" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+  <g transform="translate(855, 390)">
     <polygon points="0,-25 60,0 0,25 -60,0" fill="#0f172a"/>
     <polygon points="0,-25 60,0 0,25 -60,0" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
     <text y="4" fill="white" font-size="9" font-weight="600" text-anchor="middle">选择课程</text>
   </g>
 
   <!-- Yes: 继续 -->
-  <line x1="855" y1="435" x2="855" y2="460" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
-  <text x="865" y="452" fill="#34d399" font-size="8">确认</text>
+  <line x1="855" y1="415" x2="855" y2="445" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
+  <text x="865" y="437" fill="#34d399" font-size="8">确认</text>
 
-  <!-- Step 3: 归档存储 -->
-  <rect x="730" y="460" width="250" height="45" rx="6" fill="#0f172a"/>
-  <rect x="730" y="460" width="250" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
-  <text x="855" y="482" fill="white" font-size="10" font-weight="600" text-anchor="middle">作业文件归档并标记课程</text>
-  <text x="855" y="497" fill="#94a3b8" font-size="8" text-anchor="middle">写入文件存储系统</text>
+  <!-- Step3: 归档存储 -->
+  <rect x="730" y="445" width="250" height="45" rx="6" fill="#0f172a"/>
+  <rect x="730" y="445" width="250" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="855" y="467" fill="white" font-size="10" font-weight="600" text-anchor="middle">作业文件归档并标记课程</text>
+  <text x="855" y="482" fill="#94a3b8" font-size="8" text-anchor="middle">写入文件存储系统</text>
 
-  <!-- Database 3 -->
-  <line x1="855" y1="505" x2="855" y2="530" stroke="#a78bfa" marker-end="url(#arrow)"/>
-  <g transform="translate(790, 530)">
+  <!-- Database: 作业存储 -->
+  <line x1="855" y1="490" x2="855" y2="515" stroke="#a78bfa" marker-end="url(#arrow)"/>
+  <g transform="translate(790, 515)">
     <ellipse cx="65" cy="8" rx="65" ry="12" fill="#0f172a"/>
     <rect x="0" y="8" width="130" height="45" fill="#0f172a"/>
     <ellipse cx="65" cy="53" rx="65" ry="12" fill="#0f172a"/>
@@ -171,16 +167,16 @@
     <text x="65" y="35" fill="white" font-size="10" font-weight="600" text-anchor="middle">作业存储</text>
   </g>
 
-  <!-- Step 4: AI批改 -->
-  <line x1="855" y1="598" x2="855" y2="623" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-  <rect x="730" y="623" width="250" height="50" rx="6" fill="#0f172a"/>
-  <rect x="730" y="623" width="250" height="50" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
-  <text x="855" y="643" fill="white" font-size="10" font-weight="600" text-anchor="middle">AI 批改引擎处理</text>
-  <text x="855" y="658" fill="#94a3b8" font-size="8" text-anchor="middle">结合细则 + 课件 + 作业内容</text>
+  <!-- Step4: AI批改 -->
+  <line x1="855" y1="583" x2="855" y2="608" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+  <rect x="730" y="608" width="250" height="50" rx="6" fill="#0f172a"/>
+  <rect x="730" y="608" width="250" height="50" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="855" y="628" fill="white" font-size="10" font-weight="600" text-anchor="middle">AI 批改引擎处理</text>
+  <text x="855" y="643" fill="#94a3b8" font-size="8" text-anchor="middle">结合细则 + 课件 + 作业内容</text>
 
   <!-- RAG 检索 -->
-  <line x1="855" y1="673" x2="855" y2="698" stroke="#a78bfa" marker-end="url(#arrow)"/>
-  <g transform="translate(790, 698)">
+  <line x1="855" y1="658" x2="855" y2="683" stroke="#a78bfa" marker-end="url(#arrow)"/>
+  <g transform="translate(790, 683)">
     <ellipse cx="65" cy="8" rx="65" ry="12" fill="#0f172a"/>
     <rect x="0" y="8" width="130" height="45" fill="#0f172a"/>
     <ellipse cx="65" cy="53" rx="65" ry="12" fill="#0f172a"/>
@@ -191,109 +187,109 @@
     <text x="65" y="35" fill="white" font-size="10" font-weight="600" text-anchor="middle">RAG 检索</text>
   </g>
 
-  <!-- Step 5: 发送结果 -->
-  <line x1="855" y1="766" x2="855" y2="791" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
-  <rect x="730" y="791" width="250" height="45" rx="6" fill="#0f172a"/>
-  <rect x="730" y="791" width="250" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
-  <text x="855" y="813" fill="white" font-size="10" font-weight="600" text-anchor="middle">私信发送批改结果摘要</text>
-  <text x="855" y="828" fill="#94a3b8" font-size="8" text-anchor="middle">总分 + 扣分依据 + 申诉入口</text>
+  <!-- Step5: 发送结果 -->
+  <line x1="855" y1="751" x2="855" y2="776" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
+  <rect x="730" y="776" width="250" height="45" rx="6" fill="#0f172a"/>
+  <rect x="730" y="776" width="250" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="855" y="798" fill="white" font-size="10" font-weight="600" text-anchor="middle">私信发送批改结果摘要</text>
+  <text x="855" y="813" fill="#94a3b8" font-size="8" text-anchor="middle">总分 + 扣分依据 + 申诉入口</text>
 
   <!-- End -->
-  <line x1="855" y1="836" x2="855" y2="865" stroke="#64748b" marker-end="url(#arrow)"/>
-  <rect x="810" y="865" width="90" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
-  <text x="855" y="885" fill="white" font-size="10" font-weight="600" text-anchor="middle">批改完成</text>
+  <line x1="855" y1="821" x2="855" y2="850" stroke="#64748b" marker-end="url(#arrow)"/>
+  <rect x="810" y="850" width="90" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="855" y="870" fill="white" font-size="10" font-weight="600" text-anchor="middle">批改完成</text>
 
-  <!-- ========== 流程三：申诉审批 ========== -->
-  <rect x="50" y="930" width="1100" height="30" rx="6" fill="rgba(136,19,55,0.3)" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,2"/>
-  <text x="70" y="950" fill="#fb7185" font-size="11" font-weight="600">流程三：申诉审批流程</text>
+  <!-- ========== 流程三：申诉审批流程 (y: 950-1320) ========== -->
+  <rect x="50" y="950" width="1100" height="30" rx="6" fill="rgba(136,19,55,0.3)" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="70" y="970" fill="#fb7185" font-size="11" font-weight="600">流程三：申诉审批流程</text>
 
   <!-- Start: 学生 -->
-  <rect x="180" y="975" width="60" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
-  <text x="210" y="995" fill="white" font-size="10" font-weight="600" text-anchor="middle">学生</text>
+  <rect x="180" y="995" width="60" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="210" y="1015" fill="white" font-size="10" font-weight="600" text-anchor="middle">学生</text>
 
-  <!-- Step 1: 发起申诉 -->
-  <line x1="210" y1="1005" x2="210" y2="1030" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
-  <rect x="70" y="1030" width="280" height="45" rx="6" fill="#0f172a"/>
-  <rect x="70" y="1030" width="280" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
-  <text x="210" y="1052" fill="white" font-size="10" font-weight="600" text-anchor="middle">回复「申诉 + 理由」</text>
-  <text x="210" y="1067" fill="#94a3b8" font-size="8" text-anchor="middle">提交申诉申请</text>
+  <!-- Step1: 发起申诉 -->
+  <line x1="210" y1="1025" x2="210" y2="1050" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
+  <rect x="70" y="1050" width="280" height="45" rx="6" fill="#0f172a"/>
+  <rect x="70" y="1050" width="280" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="210" y="1072" fill="white" font-size="10" font-weight="600" text-anchor="middle">回复「申诉 + 理由」</text>
+  <text x="210" y="1087" fill="#94a3b8" font-size="8" text-anchor="middle">提交申诉申请</text>
 
   <!-- Arrow to AI -->
-  <line x1="350" y1="1052" x2="420" y2="1052" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-  <text x="385" y="1042" fill="#94a3b8" font-size="8">申诉理由</text>
+  <line x1="350" y1="1072" x2="420" y2="1072" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+  <text x="385" y="1062" fill="#94a3b8" font-size="8">申诉理由</text>
 
   <!-- AI 重评 -->
-  <rect x="420" y="1030" width="200" height="50" rx="6" fill="#0f172a"/>
-  <rect x="420" y="1030" width="200" height="50" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
-  <text x="520" y="1052" fill="white" font-size="10" font-weight="600" text-anchor="middle">AI 自动重评</text>
-  <text x="520" y="1067" fill="#94a3b8" font-size="8" text-anchor="middle">检索课件 + 重新评分</text>
+  <rect x="420" y="1050" width="200" height="50" rx="6" fill="#0f172a"/>
+  <rect x="420" y="1050" width="200" height="50" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="520" y="1072" fill="white" font-size="10" font-weight="600" text-anchor="middle">AI 自动重评</text>
+  <text x="520" y="1087" fill="#94a3b8" font-size="8" text-anchor="middle">检索课件 + 重新评分</text>
 
   <!-- Arrow to TA -->
-  <line x1="620" y1="1055" x2="700" y2="1055" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-  <text x="660" y="1045" fill="#94a3b8" font-size="8">重评结果</text>
+  <line x1="620" y1="1075" x2="700" y2="1075" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+  <text x="660" y="1065" fill="#94a3b8" font-size="8">重评结果</text>
 
   <!-- 助教 -->
-  <rect x="700" y="975" width="60" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
-  <text x="730" y="995" fill="white" font-size="10" font-weight="600" text-anchor="middle">助教</text>
+  <rect x="700" y="995" width="60" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="730" y="1015" fill="white" font-size="10" font-weight="600" text-anchor="middle">助教</text>
 
-  <!-- 通知助教 -->
-  <rect x="560" y="1030" width="220" height="45" rx="6" fill="#0f172a"/>
-  <rect x="560" y="1030" width="220" height="45" rx="6" fill="rgba(136,19,55,0.6)" stroke="#fb7185" stroke-width="1.5"/>
-  <text x="670" y="1052" fill="white" font-size="10" font-weight="600" text-anchor="middle">群机器人推送申诉通知</text>
-  <text x="670" y="1067" fill="#94a3b8" font-size="8" text-anchor="middle">含原分 + AI重评 + 理由</text>
+  <!-- 通知助教 (位置调整，避免与审批菱形叠加) -->
+  <rect x="560" y="1050" width="220" height="45" rx="6" fill="#0f172a"/>
+  <rect x="560" y="1050" width="220" height="45" rx="6" fill="rgba(136,19,55,0.6)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="670" y="1072" fill="white" font-size="10" font-weight="600" text-anchor="middle">群机器人推送申诉通知</text>
+  <text x="670" y="1087" fill="#94a3b8" font-size="8" text-anchor="middle">含原分 + AI重评 + 理由</text>
 
-  <!-- Decision: 审批 -->
-  <line x1="730" y1="1005" x2="730" y2="1030" stroke="#fb7185" marker-end="url(#arrow-rose)"/>
-  <g transform="translate(730, 1060)">
+  <!-- Decision: 审批 (下移，避免叠加) -->
+  <line x1="730" y1="1025" x2="730" y2="1120" stroke="#fb7185" marker-end="url(#arrow-rose)"/>
+  <g transform="translate(730, 1120)">
     <polygon points="0,-25 60,0 0,25 -60,0" fill="#0f172a"/>
     <polygon points="0,-25 60,0 0,25 -60,0" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
     <text y="4" fill="white" font-size="9" font-weight="600" text-anchor="middle">审批决策</text>
   </g>
 
   <!-- 审批结果 -->
-  <line x1="730" y1="1085" x2="730" y2="1110" stroke="#fb7185" marker-end="url(#arrow-rose)"/>
+  <line x1="730" y1="1145" x2="730" y2="1170" stroke="#fb7185" marker-end="url(#arrow-rose)"/>
 
-  <!-- 同意 -->
-  <rect x="600" y="1110" width="260" height="40" rx="6" fill="#0f172a"/>
-  <rect x="600" y="1110" width="260" height="40" rx="6" fill="rgba(6,78,59,0.5)" stroke="#34d399" stroke-width="1.5"/>
-  <text x="730" y="1133" fill="white" font-size="10" font-weight="600" text-anchor="middle">回复「同意」或「驳回+原因」</text>
+  <!-- 同意/驳回 -->
+  <rect x="600" y="1170" width="260" height="40" rx="6" fill="#0f172a"/>
+  <rect x="600" y="1170" width="260" height="40" rx="6" fill="rgba(6,78,59,0.5)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="730" y="1193" fill="white" font-size="10" font-weight="600" text-anchor="middle">回复「同意」或「驳回+原因」</text>
 
   <!-- 通知学生 -->
-  <line x1="730" y1="1150" x2="730" y2="1175" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
-  <rect x="600" y="1175" width="260" height="40" rx="6" fill="#0f172a"/>
-  <rect x="600" y="1175" width="260" height="40" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
-  <text x="730" y="1198" fill="white" font-size="10" font-weight="600" text-anchor="middle">私信通知学生审批结果</text>
+  <line x1="730" y1="1210" x2="730" y2="1235" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
+  <rect x="600" y="1235" width="260" height="40" rx="6" fill="#0f172a"/>
+  <rect x="600" y="1235" width="260" height="40" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="730" y="1258" fill="white" font-size="10" font-weight="600" text-anchor="middle">私信通知学生审批结果</text>
 
   <!-- End -->
-  <line x1="730" y1="1215" x2="730" y2="1240" stroke="#64748b" marker-end="url(#arrow)"/>
-  <rect x="685" y="1240" width="90" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
-  <text x="730" y="1260" fill="white" font-size="10" font-weight="600" text-anchor="middle">申诉完成</text>
+  <line x1="730" y1="1275" x2="730" y2="1300" stroke="#64748b" marker-end="url(#arrow)"/>
+  <rect x="685" y="1300" width="90" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="730" y="1320" fill="white" font-size="10" font-weight="600" text-anchor="middle">申诉完成</text>
 
-  <!-- ========== 流程四：课件智能问答 ========== -->
-  <rect x="50" y="1310" width="1100" height="30" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="4,2"/>
-  <text x="70" y="1330" fill="#fbbf24" font-size="11" font-weight="600">流程四：课件智能问答</text>
+  <!-- ========== 流程四：课件智能问答 (y: 1370-1650) ========== -->
+  <rect x="50" y="1370" width="1100" height="30" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="70" y="1390" fill="#fbbf24" font-size="11" font-weight="600">流程四：课件智能问答</text>
 
   <!-- Start: 学生 -->
-  <rect x="180" y="1355" width="60" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
-  <text x="210" y="1375" fill="white" font-size="10" font-weight="600" text-anchor="middle">学生</text>
+  <rect x="180" y="1415" width="60" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="210" y="1435" fill="white" font-size="10" font-weight="600" text-anchor="middle">学生</text>
 
-  <!-- Step 1: @提问 -->
-  <line x1="210" y1="1385" x2="210" y2="1410" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
-  <rect x="70" y="1410" width="280" height="45" rx="6" fill="#0f172a"/>
-  <rect x="70" y="1410" width="280" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
-  <text x="210" y="1432" fill="white" font-size="10" font-weight="600" text-anchor="middle">群内 @机器人 提问</text>
-  <text x="210" y="1447" fill="#94a3b8" font-size="8" text-anchor="middle">如：第三章ER模型怎么设计？</text>
+  <!-- Step1: @提问 -->
+  <line x1="210" y1="1445" x2="210" y2="1470" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
+  <rect x="70" y="1470" width="280" height="45" rx="6" fill="#0f172a"/>
+  <rect x="70" y="1470" width="280" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="210" y="1492" fill="white" font-size="10" font-weight="600" text-anchor="middle">群内 @机器人 提问</text>
+  <text x="210" y="1507" fill="#94a3b8" font-size="8" text-anchor="middle">如：第三章ER模型怎么设计？</text>
 
   <!-- 意图识别 -->
-  <line x1="350" y1="1432" x2="420" y2="1432" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-  <rect x="420" y="1410" width="200" height="45" rx="6" fill="#0f172a"/>
-  <rect x="420" y="1410" width="200" height="45" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
-  <text x="520" y="1432" fill="white" font-size="10" font-weight="600" text-anchor="middle">意图识别路由</text>
-  <text x="520" y="1447" fill="#94a3b8" font-size="8" text-anchor="middle">ASK_QUESTION</text>
+  <line x1="350" y1="1492" x2="420" y2="1492" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+  <rect x="420" y="1470" width="200" height="45" rx="6" fill="#0f172a"/>
+  <rect x="420" y="1470" width="200" height="45" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="520" y="1492" fill="white" font-size="10" font-weight="600" text-anchor="middle">意图识别路由</text>
+  <text x="520" y="1507" fill="#94a3b8" font-size="8" text-anchor="middle">ASK_QUESTION</text>
 
   <!-- RAG 检索 -->
-  <line x1="620" y1="1432" x2="690" y2="1432" stroke="#a78bfa" marker-end="url(#arrow)"/>
-  <g transform="translate(690, 1405)">
+  <line x1="620" y1="1492" x2="690" y2="1492" stroke="#a78bfa" marker-end="url(#arrow)"/>
+  <g transform="translate(690, 1465)">
     <ellipse cx="65" cy="8" rx="65" ry="12" fill="#0f172a"/>
     <rect x="0" y="8" width="130" height="45" fill="#0f172a"/>
     <ellipse cx="65" cy="53" rx="65" ry="12" fill="#0f172a"/>
@@ -304,61 +300,61 @@
     <text x="65" y="35" fill="white" font-size="10" font-weight="600" text-anchor="middle">RAG 检索</text>
   </g>
 
-  <!-- Step 2: AI生成回答 -->
-  <line x1="755" y1="1432" x2="820" y2="1432" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-  <rect x="820" y="1410" width="200" height="45" rx="6" fill="#0f172a"/>
-  <rect x="820" y="1410" width="200" height="45" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
-  <text x="920" y="1432" fill="white" font-size="10" font-weight="600" text-anchor="middle">AI 生成回答</text>
-  <text x="920" y="1447" fill="#94a3b8" font-size="8" text-anchor="middle">引用课件原文</text>
+  <!-- Step2: AI生成回答 -->
+  <line x1="755" y1="1492" x2="820" y2="1492" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+  <rect x="820" y="1470" width="200" height="45" rx="6" fill="#0f172a"/>
+  <rect x="820" y="1470" width="200" height="45" rx="6" fill="rgba(120,53,15,0.4)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="920" y="1492" fill="white" font-size="10" font-weight="600" text-anchor="middle">AI 生成回答</text>
+  <text x="920" y="1507" fill="#94a3b8" font-size="8" text-anchor="middle">引用课件原文</text>
 
-  <!-- Step 3: 群内回复 -->
-  <line x1="1020" y1="1432" x2="1080" y2="1432" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
-  <rect x="920" y="1410" width="160" height="45" rx="6" fill="#0f172a"/>
-  <rect x="920" y="1410" width="160" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
-  <text x="1000" y="1432" fill="white" font-size="10" font-weight="600" text-anchor="middle">群内回复学生</text>
+  <!-- Step3: 群内回复 -->
+  <line x1="1020" y1="1492" x2="1080" y2="1492" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
+  <rect x="920" y="1470" width="160" height="45" rx="6" fill="#0f172a"/>
+  <rect x="920" y="1470" width="160" height="45" rx="6" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="1000" y="1492" fill="white" font-size="10" font-weight="600" text-anchor="middle">群内回复学生</text>
 
-  <!-- 示例回答框 -->
-  <rect x="920" y="1460" width="250" height="80" rx="6" fill="rgba(30,41,59,0.5)" stroke="#334155" stroke-width="1"/>
-  <text x="940" y="1480" fill="#94a3b8" font-size="9">回答示例：</text>
-  <text x="940" y="1498" fill="white" font-size="9">根据第3章-ER模型.pptx (P8-12)：</text>
-  <text x="940" y="1515" fill="white" font-size="9">ER模型设计步骤如下：</text>
-  <text x="940" y="1532" fill="#94a3b8" font-size="9">1. 实体识别...</text>
+  <!-- 回答示例框 (与上方保持间距) -->
+  <rect x="920" y="1520" width="250" height="80" rx="6" fill="rgba(30,41,59,0.5)" stroke="#334155" stroke-width="1"/>
+  <text x="940" y="1540" fill="#94a3b8" font-size="9">回答示例：</text>
+  <text x="940" y="1558" fill="white" font-size="9">根据第3章-ER模型.pptx (P8-12)：</text>
+  <text x="940" y="1575" fill="white" font-size="9">ER模型设计步骤如下：</text>
+  <text x="940" y="1592" fill="#94a3b8" font-size="9">1. 实体识别...</text>
 
   <!-- End -->
-  <line x1="1000" y1="1540" x2="1000" y2="1565" stroke="#64748b" marker-end="url(#arrow)"/>
-  <rect x="955" y="1565" width="90" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
-  <text x="1000" y="1585" fill="white" font-size="10" font-weight="600" text-anchor="middle">问答完成</text>
+  <line x1="1000" y1="1600" x2="1000" y2="1625" stroke="#64748b" marker-end="url(#arrow)"/>
+  <rect x="955" y="1625" width="90" height="30" rx="15" fill="rgba(59,130,246,0.4)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="1000" y="1645" fill="white" font-size="10" font-weight="600" text-anchor="middle">问答完成</text>
 
   <!-- ========== Footer ========== -->
-  <text x="600" y="1650" fill="#64748b" font-size="9" text-anchor="middle">QQ课程AI助手 · 核心交互流程图 · 基于 baoyu-diagram 生成</text>
-  <text x="600" y="1670" fill="#475569" font-size="8" text-anchor="middle">Copyright © 2026 · 课程AI助手项目组</text>
+  <text x="600" y="1830" fill="#64748b" font-size="9" text-anchor="middle">QQ课程AI助手 · 核心交互流程图 · 基于 baoyu-diagram 生成</text>
+  <text x="600" y="1850" fill="#475569" font-size="8" text-anchor="middle">Copyright © 2026 · 课程AI助手项目组</text>
 
   <!-- 关键技术标注 -->
-  <rect x="50" y="1700" width="1100" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#334155" stroke-width="1"/>
-  <text x="70" y="1720" fill="white" font-size="10" font-weight="600">核心技术栈</text>
-  <rect x="70" y="1730" width="80" height="20" rx="4" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1"/>
-  <text x="110" y="1744" fill="white" font-size="9" text-anchor="middle">Qclaw SDK</text>
-  <rect x="160" y="1730" width="80" height="20" rx="4" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1"/>
-  <text x="200" y="1744" fill="white" font-size="9" text-anchor="middle">DeepSeek API</text>
-  <rect x="250" y="1730" width="80" height="20" rx="4" fill="rgba(76,29,149,0.6)" stroke="#a78bfa" stroke-width="1"/>
-  <text x="290" y="1744" fill="white" font-size="9" text-anchor="middle">ChromaDB</text>
-  <rect x="340" y="1730" width="80" height="20" rx="4" fill="rgba(76,29,149,0.6)" stroke="#a78bfa" stroke-width="1"/>
-  <text x="380" y="1744" fill="white" font-size="9" text-anchor="middle">SQLite</text>
-  <rect x="430" y="1730" width="80" height="20" rx="4" fill="rgba(120,53,15,0.5)" stroke="#fbbf24" stroke-width="1"/>
-  <text x="470" y="1744" fill="white" font-size="9" text-anchor="middle">RAG检索</text>
-  <rect x="520" y="1730" width="80" height="20" rx="4" fill="rgba(120,53,15,0.5)" stroke="#fbbf24" stroke-width="1"/>
-  <text x="560" y="1744" fill="white" font-size="9" text-anchor="middle">意图识别</text>
-  <rect x="610" y="1730" width="80" height="20" rx="4" fill="rgba(120,53,15,0.5)" stroke="#fbbf24" stroke-width="1"/>
-  <text x="650" y="1744" fill="white" font-size="9" text-anchor="middle">向量嵌入</text>
+  <rect x="50" y="1880" width="1100" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#334155" stroke-width="1"/>
+  <text x="70" y="1900" fill="white" font-size="10" font-weight="600">核心技术栈</text>
+  <rect x="70" y="1910" width="80" height="20" rx="4" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1"/>
+  <text x="110" y="1924" fill="white" font-size="9" text-anchor="middle">Qclaw SDK</text>
+  <rect x="160" y="1910" width="80" height="20" rx="4" fill="rgba(6,78,59,0.6)" stroke="#34d399" stroke-width="1"/>
+  <text x="200" y="1924" fill="white" font-size="9" text-anchor="middle">DeepSeek API</text>
+  <rect x="250" y="1910" width="80" height="20" rx="4" fill="rgba(76,29,149,0.6)" stroke="#a78bfa" stroke-width="1"/>
+  <text x="290" y="1924" fill="white" font-size="9" text-anchor="middle">ChromaDB</text>
+  <rect x="340" y="1910" width="80" height="20" rx="4" fill="rgba(76,29,149,0.6)" stroke="#a78bfa" stroke-width="1"/>
+  <text x="380" y="1924" fill="white" font-size="9" text-anchor="middle">SQLite</text>
+  <rect x="430" y="1910" width="80" height="20" rx="4" fill="rgba(120,53,15,0.5)" stroke="#fbbf24" stroke-width="1"/>
+  <text x="470" y="1924" fill="white" font-size="9" text-anchor="middle">RAG检索</text>
+  <rect x="520" y="1910" width="80" height="20" rx="4" fill="rgba(120,53,15,0.5)" stroke="#fbbf24" stroke-width="1"/>
+  <text x="560" y="1924" fill="white" font-size="9" text-anchor="middle">意图识别</text>
+  <rect x="610" y="1910" width="80" height="20" rx="4" fill="rgba(120,53,15,0.5)" stroke="#fbbf24" stroke-width="1"/>
+  <text x="650" y="1924" fill="white" font-size="9" text-anchor="middle">向量嵌入</text>
 
   <!-- 模块标注 -->
-  <text x="70" y="1720" fill="white" font-size="10" font-weight="600">核心模块</text>
-  <rect x="750" y="1730" width="80" height="20" rx="4" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1"/>
-  <text x="790" y="1744" fill="white" font-size="9" text-anchor="middle">M01 接入层</text>
-  <rect x="840" y="1730" width="80" height="20" rx="4" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1"/>
-  <text x="880" y="1744" fill="white" font-size="9" text-anchor="middle">M02 意图路由</text>
-  <rect x="930" y="1730" width="80" height="20" rx="4" fill="rgba(76,29,149,0.6)" stroke="#a78bfa" stroke-width="1"/>
-  <text x="970" y="1744" fill="white" font-size="9" text-anchor="middle">M05 知识库</text>
-  <rect x="1020" y="1730" width="80" height="20" rx="4" fill="rgba(120,53,15,0.5)" stroke="#fbbf24" stroke-width="1"/>
-  <text x="1060" y="1744" fill="white" font-size="9" text-anchor="middle">M07 批改引擎</text>
+  <text x="70" y="1900" fill="white" font-size="10" font-weight="600">核心模块</text>
+  <rect x="750" y="1910" width="80" height="20" rx="4" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1"/>
+  <text x="790" y="1924" fill="white" font-size="9" text-anchor="middle">M01 接入层</text>
+  <rect x="840" y="1910" width="80" height="20" rx="4" fill="rgba(8,51,68,0.6)" stroke="#22d3ee" stroke-width="1"/>
+  <text x="880" y="1924" fill="white" font-size="9" text-anchor="middle">M02 意图路由</text>
+  <rect x="930" y="1910" width="80" height="20" rx="4" fill="rgba(76,29,149,0.6)" stroke="#a78bfa" stroke-width="1"/>
+  <text x="970" y="1924" fill="white" font-size="9" text-anchor="middle">M05 知识库</text>
+  <rect x="1020" y="1910" width="80" height="20" rx="4" fill="rgba(120,53,15,0.5)" stroke="#fbbf24" stroke-width="1"/>
+  <text x="1060" y="1924" fill="white" font-size="9" text-anchor="middle">M07 批改引擎</text>
 </svg>
