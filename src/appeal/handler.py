@@ -12,7 +12,7 @@ from typing import Callable, Optional
 
 from grading.engine import GradingEngine
 from storage.db import DB
-from contracts.models import Appeal
+from contracts.models import Appeal, GradingResult
 
 logger = logging.getLogger("appeal")
 
@@ -57,6 +57,23 @@ class AppealHandler:
             created_at=datetime.now(),
             status="pending",
         )
+
+        assignment = self.db.get_assignment(submission.assignment_id)
+        rubric = self.db.get_rubric(assignment.rubric_id) if assignment and assignment.rubric_id else None
+        if rubric:
+            title = assignment.title if assignment else ""
+            regrade_result = self.grading_engine.regrade_for_appeal(
+                submission,
+                rubric,
+                reason,
+                title,
+            )
+            appeal.new_score = regrade_result.total_score
+            appeal.ai_feedback = regrade_result.feedback
+            appeal.ai_confidence = regrade_result.confidence
+            appeal.ai_confidence_label = regrade_result.confidence_label
+            appeal.regrade_result = self._serialize_regrade_result(regrade_result)
+
         self.db.save_appeal(appeal)
 
         submission.appeal_status = "pending"
@@ -78,19 +95,10 @@ class AppealHandler:
 
         if approved:
             appeal.status = "approved"
-            assignment = self.db.get_assignment(submission.assignment_id)
-            rubric = self.db.get_rubric(assignment.rubric_id) if assignment and assignment.rubric_id else None
-            if rubric:
-                title = assignment.title if assignment else ""
-                new_result = self.grading_engine.regrade_for_appeal(
-                    submission,
-                    rubric,
-                    appeal.reason,
-                    title,
-                )
-                appeal.new_score = new_result.total_score
-                submission.score = new_result.total_score
-                submission.feedback = new_result.feedback
+            if appeal.new_score is not None:
+                submission.score = appeal.new_score
+            if appeal.ai_feedback:
+                submission.feedback = appeal.ai_feedback
             submission.appeal_status = "approved"
             self.db.save_submission(submission)
         else:
@@ -130,3 +138,21 @@ class AppealHandler:
 
     def list_pending(self):
         return self.db.list_pending_appeals()
+
+    @staticmethod
+    def _serialize_regrade_result(result: GradingResult) -> dict:
+        return {
+            "submission_id": result.submission_id,
+            "dimension_scores": result.dimension_scores,
+            "total_score": result.total_score,
+            "feedback": result.feedback,
+            "confidence": result.confidence,
+            "confidence_label": result.confidence_label,
+            "gain_points": result.gain_points,
+            "deductions": result.deductions,
+            "regrade_diff": result.regrade_diff,
+            "graded_by": result.graded_by,
+            "graded_at": result.graded_at.isoformat(),
+            "appeal_count": result.appeal_count,
+            "grading_context": result.grading_context,
+        }

@@ -92,6 +92,11 @@ class DB:
         total_score REAL NOT NULL,
         feedback TEXT NOT NULL,
         confidence REAL NOT NULL,
+        confidence_label TEXT DEFAULT 'medium',
+        grading_context TEXT DEFAULT '',
+        gain_points TEXT DEFAULT '{}',
+        deductions TEXT DEFAULT '{}',
+        regrade_diff TEXT DEFAULT '{}',
         graded_by TEXT DEFAULT 'ai',
         graded_at TEXT NOT NULL,
         appeal_count INTEGER DEFAULT 0,
@@ -107,6 +112,10 @@ class DB:
         status TEXT DEFAULT 'pending',
         new_score REAL,
         reviewed_by TEXT,
+        ai_feedback TEXT DEFAULT '',
+        ai_confidence REAL,
+        ai_confidence_label TEXT DEFAULT '',
+        regrade_result TEXT DEFAULT '{}',
         FOREIGN KEY (submission_id) REFERENCES submissions(id)
     );
 
@@ -223,8 +232,19 @@ class DB:
 
     def _init_schema(self):
         with self._write_lock:
-            self._conn.executescript(self.SCHEMA_SQL)
+            deferred_index_sql = []
+            for statement in self.SCHEMA_SQL.split(";"):
+                stmt = statement.strip()
+                if not stmt:
+                    continue
+                normalized = stmt.upper()
+                if normalized.startswith("CREATE INDEX"):
+                    deferred_index_sql.append(stmt + ";")
+                    continue
+                self._conn.execute(stmt)
             self._migrate_schema()
+            for stmt in deferred_index_sql:
+                self._conn.execute(stmt)
             self._conn.commit()
 
     def _migrate_schema(self):
@@ -232,6 +252,15 @@ class DB:
         self._ensure_column("rubrics", "course_id", "TEXT NOT NULL DEFAULT 'default'")
         self._ensure_column("assignments", "course_id", "TEXT NOT NULL DEFAULT 'default'")
         self._ensure_column("submissions", "course_id", "TEXT NOT NULL DEFAULT 'default'")
+        self._ensure_column("grading_results", "confidence_label", "TEXT DEFAULT 'medium'")
+        self._ensure_column("grading_results", "grading_context", "TEXT DEFAULT ''")
+        self._ensure_column("grading_results", "gain_points", "TEXT DEFAULT '{}'")
+        self._ensure_column("grading_results", "deductions", "TEXT DEFAULT '{}'")
+        self._ensure_column("grading_results", "regrade_diff", "TEXT DEFAULT '{}'")
+        self._ensure_column("appeals", "ai_feedback", "TEXT DEFAULT ''")
+        self._ensure_column("appeals", "ai_confidence", "REAL")
+        self._ensure_column("appeals", "ai_confidence_label", "TEXT DEFAULT ''")
+        self._ensure_column("appeals", "regrade_result", "TEXT DEFAULT '{}'")
 
     def _ensure_column(self, table_name: str, column_name: str, column_def: str):
         columns = self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
@@ -371,11 +400,11 @@ class DB:
     def list_assignments(self, course_id: Optional[str] = None) -> List[Assignment]:
         if course_id:
             rows = self._conn.execute(
-                "SELECT * FROM assignments WHERE course_id=?",
+                "SELECT * FROM assignments WHERE course_id=? ORDER BY created_at",
                 (course_id,),
             ).fetchall()
         else:
-            rows = self._conn.execute("SELECT * FROM assignments").fetchall()
+            rows = self._conn.execute("SELECT * FROM assignments ORDER BY created_at").fetchall()
         return [self.get_assignment(r["id"]) for r in rows]   # type: ignore
 
     # ── Submission ──────────────────────────────
@@ -460,11 +489,17 @@ class DB:
         self._execute_write(
             "INSERT OR REPLACE INTO grading_results"
             "(submission_id,dimension_scores,total_score,feedback,"
-            "confidence,graded_by,graded_at,appeal_count)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            "confidence,confidence_label,grading_context,gain_points,"
+            "deductions,regrade_diff,graded_by,graded_at,appeal_count)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (g.submission_id,
              json.dumps(g.dimension_scores, ensure_ascii=False),
              g.total_score, g.feedback, g.confidence,
+             g.confidence_label,
+             g.grading_context,
+             json.dumps(g.gain_points, ensure_ascii=False),
+             json.dumps(g.deductions, ensure_ascii=False),
+             json.dumps(g.regrade_diff, ensure_ascii=False),
              g.graded_by, g.graded_at.isoformat(), g.appeal_count)
         )
 
@@ -481,6 +516,11 @@ class DB:
             total_score=row["total_score"],
             feedback=row["feedback"],
             confidence=row["confidence"],
+            confidence_label=row["confidence_label"] or "medium",
+            grading_context=row["grading_context"] or "",
+            gain_points=json.loads(row["gain_points"] or "{}"),
+            deductions=json.loads(row["deductions"] or "{}"),
+            regrade_diff=json.loads(row["regrade_diff"] or "{}"),
             graded_by=row["graded_by"],
             graded_at=datetime.fromisoformat(row["graded_at"]),
             appeal_count=row["appeal_count"]
@@ -493,11 +533,14 @@ class DB:
             (
                 "INSERT OR REPLACE INTO appeals"
                 "(id,submission_id,student_id,reason,created_at,"
-                "status,new_score,reviewed_by)"
-                " VALUES (?,?,?,?,?,?,?,?)",
+                "status,new_score,reviewed_by,ai_feedback,"
+                "ai_confidence,ai_confidence_label,regrade_result)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (a.id, a.submission_id, a.student_id, a.reason,
                  a.created_at.isoformat(), a.status,
-                 a.new_score, a.reviewed_by)
+                 a.new_score, a.reviewed_by, a.ai_feedback,
+                 a.ai_confidence, a.ai_confidence_label,
+                 json.dumps(a.regrade_result, ensure_ascii=False))
             ),
             (
                 "UPDATE submissions SET appeal_status=? WHERE id=?",
@@ -516,7 +559,11 @@ class DB:
             student_id=row["student_id"], reason=row["reason"],
             created_at=datetime.fromisoformat(row["created_at"]),
             status=row["status"], new_score=row["new_score"],
-            reviewed_by=row["reviewed_by"]
+            reviewed_by=row["reviewed_by"],
+            ai_feedback=row["ai_feedback"] or "",
+            ai_confidence=row["ai_confidence"],
+            ai_confidence_label=row["ai_confidence_label"] or "",
+            regrade_result=json.loads(row["regrade_result"] or "{}")
         )
 
     def list_pending_appeals(self) -> List[Appeal]:

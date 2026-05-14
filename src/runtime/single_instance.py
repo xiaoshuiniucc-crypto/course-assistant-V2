@@ -119,7 +119,7 @@ class SingleInstanceGuard:
 
     def _write_record(self, payload: Dict[str, Any]):
         self.record_path.write_text(
-            json.dumps(payload, ensure_ascii=True, indent=2),
+            json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
@@ -133,7 +133,7 @@ class SingleInstanceGuard:
         if owner_info:
             record["owner"] = owner_info
         with open(self.history_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=True) + "\n")
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     @staticmethod
     def _format_owner(owner_info: Optional[Dict[str, Any]]) -> str:

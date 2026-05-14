@@ -20,8 +20,30 @@ from contracts.models import (
     ReportConfig, ReportEvidence, RadarData,
     ReportType, RubricDimension
 )
+from grading.evidence import build_grading_evidence
+from runtime.localization import (
+    localize_dimension_name,
+    localize_user_text,
+    translate_appeal_status,
+    translate_confidence_label,
+    translate_submission_status,
+)
 
 logger = logging.getLogger("report")
+
+
+def _patch_hashlib_usedforsecurity_compat() -> None:
+    """Make hashlib.md5 tolerate usedforsecurity kwarg on incompatible builds."""
+    md5_func = getattr(hashlib, "md5", None)
+    if not callable(md5_func) or getattr(md5_func, "_course_assistant_patched", False):
+        return
+
+    def _wrapped_md5(*args, **kwargs):
+        kwargs.pop("usedforsecurity", None)
+        return md5_func(*args, **kwargs)
+
+    _wrapped_md5._course_assistant_patched = True  # type: ignore[attr-defined]
+    hashlib.md5 = _wrapped_md5
 
 
 class ReportGenerator:
@@ -123,6 +145,9 @@ class ReportGenerator:
         """收集报告数据（增强版：含维度统计+排名）"""
         assignment = self.db.get_assignment(assignment_id)
         submissions = self.db.list_submissions(assignment_id)
+        rubric = None
+        if assignment and assignment.rubric_id:
+            rubric = self.db.get_rubric(assignment.rubric_id)
 
         # 按分数排序生成排名
         scored = sorted(
@@ -131,48 +156,51 @@ class ReportGenerator:
         )
 
         rows = []
-        for rank_idx, s in enumerate(scored):
+
+        def build_row(s, rank):
             result = self.db.get_grading_result(s.id)
             row = {
                 "student_id": s.student_id,
                 "student_name": s.student_name,
                 "status": s.status,
+                "status_display": translate_submission_status(s.status),
                 "score": s.score,
-                "feedback": s.feedback or "",
+                "feedback": localize_user_text(s.feedback or ""),
                 "plagiarized": s.plagiarized,
                 "appeal_status": s.appeal_status,
                 "submitted_at": s.submitted_at.isoformat(),
-                "rank": rank_idx + 1,
+                "rank": rank,
             }
             if result:
                 row["dimension_scores"] = result.dimension_scores
+                row["dimension_scores_display"] = {
+                    localize_dimension_name(name): value
+                    for name, value in result.dimension_scores.items()
+                }
                 row["confidence"] = result.confidence
-            rows.append(row)
+                row["confidence_label"] = result.confidence_label
+                row["confidence_label_display"] = translate_confidence_label(
+                    result.confidence_label
+                )
+                row["gain_points"] = result.gain_points
+                row["deductions"] = result.deductions
+                row["regrade_diff"] = result.regrade_diff
+                row["grading_context"] = result.grading_context
+                row["grading_evidence"] = [
+                    localize_user_text(item)
+                    for item in build_grading_evidence(result, rubric)
+                ]
+            return row
+
+        for rank_idx, s in enumerate(scored):
+            rows.append(build_row(s, rank_idx + 1))
 
         # 也加入未评分的
         for s in submissions:
             if s.score is None:
-                result = self.db.get_grading_result(s.id)
-                row = {
-                    "student_id": s.student_id,
-                    "student_name": s.student_name,
-                    "status": s.status,
-                    "score": None,
-                    "feedback": s.feedback or "",
-                    "plagiarized": s.plagiarized,
-                    "appeal_status": s.appeal_status,
-                    "submitted_at": s.submitted_at.isoformat(),
-                    "rank": None,
-                }
-                if result:
-                    row["dimension_scores"] = result.dimension_scores
-                    row["confidence"] = result.confidence
-                rows.append(row)
+                rows.append(build_row(s, None))
 
         scores = [s.score for s in submissions if s.score is not None]
-        rubric = None
-        if assignment and assignment.rubric_id:
-            rubric = self.db.get_rubric(assignment.rubric_id)
 
         # 维度统计
         dim_stats = self.db.get_dimension_stats(assignment_id)
@@ -187,12 +215,12 @@ class ReportGenerator:
             "min_score": min(scores) if scores else 0,
             "median_score": self._median(scores) if scores else 0,
             "rubric_dimensions": (
-                [d.name for d in rubric.dimensions]
+                [localize_dimension_name(d.name) for d in rubric.dimensions]
                 if rubric else []
             ),
             "rubric_dimension_details": (
-                [{"name": d.name, "weight": d.weight,
-                  "max_score": d.max_score, "description": d.description}
+                [{"name": localize_dimension_name(d.name), "weight": d.weight,
+                  "max_score": d.max_score, "description": localize_user_text(d.description)}
                  for d in rubric.dimensions]
                 if rubric else []
             ),
@@ -272,10 +300,11 @@ class ReportGenerator:
                     logger.warning(f"知识库检索失败: {dim_name}, {e}")
 
             # 改进建议
-            tips = self._generate_tips(dim_name, level, ratio)
+            localized_dim_name = localize_dimension_name(dim_name)
+            tips = self._generate_tips(localized_dim_name, level, ratio)
 
             evidences.append(ReportEvidence(
-                dimension_name=dim_name,
+                dimension_name=localized_dim_name,
                 avg_score=avg,
                 max_score=max_s,
                 weakness_level=level,
@@ -298,6 +327,93 @@ class ReportGenerator:
         else:
             tips.append(f"「{dim_name}」维度表现良好（达标率{ratio:.0%}），继续保持")
         return tips
+
+    @staticmethod
+    def _format_structured_items(items: List[str], empty_text: str) -> str:
+        if not items:
+            return f"<span style='color:#777'>{empty_text}</span>"
+        return "".join(
+            f"<li style='font-size:0.9em'>{item}</li>"
+            for item in items
+        )
+
+    def _build_row_detail_html(self, row: Dict) -> str:
+        confidence_html = ""
+        if row.get("confidence") is not None:
+            label = row.get("confidence_label_display") or translate_confidence_label(
+                row.get("confidence_label") or "medium"
+            )
+            confidence_html = (
+                f"<p style='margin:6px 0 0 0;color:#555'>"
+                f"AI置信度: <b>{label}</b> ({row['confidence']:.2f})"
+                f"</p>"
+            )
+
+        gain_items: List[str] = []
+        for dim_name, points in (row.get("gain_points") or {}).items():
+            if points:
+                gain_items.append(
+                    f"{localize_dimension_name(dim_name)}: "
+                    f"{'；'.join(localize_user_text(point) for point in points[:2])}"
+                )
+
+        deduction_items: List[str] = []
+        for dim_name, items in (row.get("deductions") or {}).items():
+            for item in items[:2]:
+                point = localize_user_text(str(item.get("point", "")).strip()) or "存在扣分点"
+                deduct = item.get("deduct", 0)
+                evidence = localize_user_text(str(item.get("evidence", "")).strip())
+                source = localize_user_text(str(item.get("evidence_source", "")).strip())
+                detail = f"{localize_dimension_name(dim_name)}: {point}"
+                if deduct:
+                    detail += f" (-{deduct})"
+                if source:
+                    detail += f"；来源: {source}"
+                if evidence:
+                    detail += f"；依据: {evidence[:80]}"
+                deduction_items.append(detail)
+
+        diff_items: List[str] = []
+        for dim_name, item in (row.get("regrade_diff") or {}).items():
+            if not isinstance(item, dict):
+                continue
+            old_score = item.get("old")
+            new_score = item.get("new")
+            reason = localize_user_text(str(item.get("reason", "")).strip())
+            diff_line = f"{localize_dimension_name(dim_name)}: {old_score} -> {new_score}"
+            if reason:
+                diff_line += f"；原因: {reason}"
+            diff_items.append(diff_line)
+
+        sections = [
+            "<div style='margin-top:8px;padding-top:8px;border-top:1px dashed #d8e5f2'>",
+            confidence_html,
+            "<p style='margin:8px 0 4px 0'><b>得分点</b></p>",
+            (
+                "<ul style='margin:2px 0 8px 18px'>"
+                f"{self._format_structured_items(gain_items, '暂无结构化得分点')}"
+                "</ul>"
+            ),
+            "<p style='margin:8px 0 4px 0'><b>扣分依据</b></p>",
+            (
+                "<ul style='margin:2px 0 8px 18px'>"
+                f"{self._format_structured_items(deduction_items, '暂无结构化扣分依据')}"
+                "</ul>"
+            ),
+        ]
+
+        if diff_items:
+            sections.extend([
+                "<p style='margin:8px 0 4px 0'><b>重评分差异</b></p>",
+                (
+                    "<ul style='margin:2px 0 8px 18px'>"
+                    f"{self._format_structured_items(diff_items, '暂无重评分差异')}"
+                    "</ul>"
+                ),
+            ])
+
+        sections.append("</div>")
+        return "".join(sections)
 
     @staticmethod
     def _median(values: List[float]) -> float:
@@ -386,21 +502,55 @@ class ReportGenerator:
 
     # ── 雷达图生成 ─────────────────────────────
 
+    @staticmethod
+    def _wrap_chart_label(label: str, max_chars: int = 8) -> List[str]:
+        text = (label or '').strip()
+        if not text:
+            return ['']
+        compact = (
+            text.replace("（", " ")
+            .replace("）", " ")
+            .replace("(", " ")
+            .replace(")", " ")
+            .replace("：", " ")
+            .replace(":", " ")
+        )
+        compact = compact.replace('/', ' / ').replace('|', ' | ')
+        tokens = [tok for tok in compact.split() if tok]
+        if len(tokens) >= 2 and all(len(tok) <= max_chars for tok in tokens):
+            return tokens[:3]
+        return [text[i:i + max_chars] for i in range(0, len(text), max_chars)]
+
+    @classmethod
+    def _short_chart_label(cls, label: str, max_chars: int = 10, max_lines: int = 3) -> str:
+        parts = cls._wrap_chart_label(label, max_chars=max_chars)
+        if len(parts) > max_lines:
+            parts = parts[:max_lines]
+            parts[-1] = parts[-1].rstrip("。；，、 ") + "…"
+        return "\n".join(parts)
+
+    @classmethod
+    def _svg_chart_label(cls, label: str, max_chars: int = 8, max_lines: int = 3) -> str:
+        parts = cls._wrap_chart_label(label, max_chars=max_chars)
+        if len(parts) > max_lines:
+            parts = parts[:max_lines]
+            parts[-1] = parts[-1].rstrip("。；，、 ") + "…"
+        return '<br/>'.join(parts)
+
+
     def _generate_radar_image(self, radar_data: RadarData) -> Optional[str]:
-        """生成雷达图 PNG 图片（matplotlib）"""
+        """生成雷达图 PNG，优先用于 matplotlib 渲染。"""
         if not radar_data.dimensions:
             return None
 
         try:
             import matplotlib
-            matplotlib.use('Agg')  # 非交互式后端
+            matplotlib.use('Agg')
             import matplotlib.pyplot as plt
-            from matplotlib.font_manager import FontProperties
         except ImportError:
-            logger.warning("matplotlib 未安装，跳过雷达图图片生成")
+            logger.warning("matplotlib 不可用，无法生成 PNG 雷达图")
             return None
 
-        # 中文字体
         plt.rcParams['font.sans-serif'] = [
             'SimHei', 'Microsoft YaHei', 'PingFang SC',
             'WenQuanYi Micro Hei', 'DejaVu Sans'
@@ -409,56 +559,70 @@ class ReportGenerator:
 
         n = len(radar_data.dimensions)
         if n < 3:
-            logger.warning("雷达图需要至少3个维度")
+            logger.warning("雷达图至少需要 3 个维度")
             return None
 
-        # 角度计算
         angles = [i / n * 2 * math.pi for i in range(n)]
-        angles += angles[:1]  # 闭合
+        angles += angles[:1]
+        labels = [self._short_chart_label(dim, max_chars=6, max_lines=3) for dim in radar_data.dimensions]
 
-        fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+        fig, ax = plt.subplots(figsize=(9.4, 8.6), subplot_kw=dict(polar=True))
+        fig.patch.set_facecolor('#ffffff')
+        ax.set_facecolor('#fbfdff')
+        fig.subplots_adjust(top=0.82, bottom=0.22, left=0.08, right=0.92)
 
-        # 满分参考线
         if radar_data.max_scores:
             max_vals = radar_data.max_scores + radar_data.max_scores[:1]
-            ax.plot(angles, max_vals, 'k--', linewidth=1, alpha=0.3, label='满分')
-            ax.fill(angles, max_vals, alpha=0.05, color='gray')
+            ax.plot(angles, max_vals, color='#9aa7b3', linewidth=1.2, alpha=0.55, linestyle='--', label='满分线')
+            ax.fill(angles, max_vals, alpha=0.04, color='#9aa7b3')
 
-        # 班级平均
         avg_vals = radar_data.class_avg + radar_data.class_avg[:1]
-        ax.plot(angles, avg_vals, 'b-', linewidth=2, label='班级平均')
-        ax.fill(angles, avg_vals, alpha=0.15, color='blue')
+        ax.plot(angles, avg_vals, color='#2f80ed', linewidth=2.4, label='班级均分')
+        ax.fill(angles, avg_vals, alpha=0.12, color='#2f80ed')
 
-        # 学生分数
-        colors = ['#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c']
+        colors = ['#e74c3c', '#27ae60', '#f39c12', '#8e44ad', '#16a085']
         for idx, (sid, scores) in enumerate(radar_data.student_scores.items()):
             vals = scores + scores[:1]
             color = colors[idx % len(colors)]
             label = f"学生 {sid[:6]}"
-            ax.plot(angles, vals, '-', linewidth=2, color=color, label=label)
-            ax.fill(angles, vals, alpha=0.1, color=color)
+            ax.plot(angles, vals, '-', linewidth=2.2, color=color, label=label)
+            ax.fill(angles, vals, alpha=0.10, color=color)
 
-        # 维度标签
         ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(radar_data.dimensions, fontsize=11)
+        ax.set_xticklabels(labels, fontsize=10, linespacing=1.35)
+        ax.tick_params(axis='x', pad=16)
+        ax.set_rlabel_position(15)
+        ax.tick_params(axis='y', labelsize=9, colors='#6b7280')
+        ax.grid(color='#dbe5ef', linewidth=0.8)
+        ax.spines['polar'].set_color('#c8d4e0')
+        ax.spines['polar'].set_linewidth(1.0)
+        ax.set_title('维度能力雷达图', fontsize=17, fontweight='bold', pad=28)
+        ax.legend(
+            loc='lower center',
+            bbox_to_anchor=(0.5, -0.20),
+            ncol=min(3, max(1, len(radar_data.student_scores) + 2)),
+            frameon=False,
+            fontsize=10,
+        )
 
-        # 标题和图例
-        ax.set_title('评分维度雷达图', fontsize=16, pad=20)
-        ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
-
-        # 保存
         output_path = os.path.join(
             self.output_dir,
             f"radar_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         )
-        fig.savefig(output_path, dpi=150, bbox_inches='tight',
-                    facecolor='white', edgecolor='none')
+        fig.savefig(
+            output_path,
+            dpi=170,
+            bbox_inches='tight',
+            pad_inches=0.55,
+            facecolor='white',
+            edgecolor='none',
+        )
         plt.close(fig)
         logger.info(f"雷达图已生成: {output_path}")
         return output_path
 
     def _generate_radar_svg(self, radar_data: RadarData) -> str:
-        """生成雷达图内联 SVG（用于 HTML 报告，无需 matplotlib）"""
+        """生成内联 SVG 雷达图，供 HTML 报告直接展示。"""
         if not radar_data.dimensions:
             return ""
 
@@ -466,15 +630,11 @@ class ReportGenerator:
         if n < 3:
             return ""
 
-        # SVG 画布参数
-        size = 400
-        cx, cy = size / 2, size / 2
-        radius = 150
-
-        # 角度
+        width = 660
+        height = 560
+        cx, cy = width / 2, 240
+        radius = 155
         angles = [i / n * 2 * math.pi - math.pi / 2 for i in range(n)]
-
-        # 计算最大值（用于归一化）
         max_val = max(radar_data.max_scores) if radar_data.max_scores else 100
 
         def to_point(idx, val):
@@ -483,81 +643,86 @@ class ReportGenerator:
             y = cy + r * math.sin(angles[idx])
             return f"{x:.1f},{y:.1f}"
 
-        # 网格环（5层）
-        grid_rings = ""
+        grid_rings = []
         for level in range(1, 6):
             r = (level / 5) * radius
-            points = " ".join([
+            points = " ".join(
                 f"{cx + r * math.cos(a):.1f},{cy + r * math.sin(a):.1f}"
                 for a in angles
-            ])
-            grid_rings += f'<polygon points="{points}" fill="none" stroke="#ddd" stroke-width="0.5"/>\n'
-
-        # 轴线
-        axis_lines = ""
-        for a in angles:
-            x = cx + radius * math.cos(a)
-            y = cy + radius * math.sin(a)
-            axis_lines += f'<line x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}" stroke="#ccc" stroke-width="0.5"/>\n'
-
-        # 维度标签
-        labels = ""
-        for i, dim in enumerate(radar_data.dimensions):
-            lx = cx + (radius + 25) * math.cos(angles[i])
-            ly = cy + (radius + 25) * math.sin(angles[i])
-            anchor = "middle"
-            if math.cos(angles[i]) > 0.3:
-                anchor = "start"
-            elif math.cos(angles[i]) < -0.3:
-                anchor = "end"
-            labels += f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" font-size="11" fill="#333">{dim}</text>\n'
-
-        # 班级平均多边形
-        avg_points = " ".join([
-            to_point(i, v) for i, v in enumerate(radar_data.class_avg)
-        ])
-        avg_polygon = (
-            f'<polygon points="{avg_points}" fill="rgba(66,133,244,0.15)" '
-            f'stroke="#4285f4" stroke-width="2"/>'
-        )
-
-        # 学生多边形
-        student_polygons = ""
-        colors = ["#e74c3c", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c"]
-        for idx, (sid, scores) in enumerate(radar_data.student_scores.items()):
-            pts = " ".join([
-                to_point(i, v) for i, v in enumerate(scores)
-            ])
-            c = colors[idx % len(colors)]
-            student_polygons += (
-                f'<polygon points="{pts}" fill="{c}22" '
-                f'stroke="{c}" stroke-width="2" stroke-dasharray="5,3"/>'
+            )
+            grid_rings.append(
+                f'<polygon points="{points}" fill="none" stroke="#d9e2ec" stroke-width="1"/>'
             )
 
-        # 图例
-        legend = f'<circle cx="30" cy="{size - 40}" r="5" fill="#4285f4"/>'
-        legend += f'<text x="40" y="{size - 36}" font-size="10" fill="#333">班级平均</text>'
-        for idx, (sid, _) in enumerate(radar_data.student_scores.items()):
-            c = colors[idx % len(colors)]
-            y_pos = size - 25 + idx * 15
-            legend += f'<circle cx="30" cy="{y_pos}" r="5" fill="{c}"/>'
-            legend += f'<text x="40" y="{y_pos + 4}" font-size="10" fill="#333">学生 {sid[:6]}</text>'
+        axis_lines = []
+        label_nodes = []
+        for i, dim in enumerate(radar_data.dimensions):
+            x = cx + radius * math.cos(angles[i])
+            y = cy + radius * math.sin(angles[i])
+            axis_lines.append(
+                f'<line x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}" stroke="#c7d2de" stroke-width="1"/>'
+            )
+            lx = cx + (radius + 40) * math.cos(angles[i])
+            ly = cy + (radius + 40) * math.sin(angles[i])
+            anchor = 'middle'
+            if math.cos(angles[i]) > 0.35:
+                anchor = 'start'
+            elif math.cos(angles[i]) < -0.35:
+                anchor = 'end'
+            lines = self._wrap_chart_label(dim, max_chars=6)[:3]
+            tspans = ''.join(
+                f'<tspan x="{lx:.1f}" dy="{0 if idx == 0 else 14}">{line}</tspan>'
+                for idx, line in enumerate(lines)
+            )
+            label_nodes.append(
+                f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" font-size="12" '
+                f'font-weight="600" fill="#334155">{tspans}</text>'
+            )
 
-        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size + 30}" width="{size}">
-        {grid_rings}
-        {axis_lines}
-        {avg_polygon}
-        {student_polygons}
-        {labels}
-        {legend}
-        <text x="{cx}" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#333">评分维度雷达图</text>
-        </svg>"""
+        avg_points = ' '.join(to_point(i, v) for i, v in enumerate(radar_data.class_avg))
+        avg_polygon = (
+            f'<polygon points="{avg_points}" fill="#2f80ed20" '
+            f'stroke="#2f80ed" stroke-width="2.4"/>'
+        )
 
+        student_polygons = []
+        colors = ['#e74c3c', '#27ae60', '#f39c12', '#8e44ad', '#16a085']
+        for idx, (sid, scores) in enumerate(radar_data.student_scores.items()):
+            pts = ' '.join(to_point(i, v) for i, v in enumerate(scores))
+            color = colors[idx % len(colors)]
+            student_polygons.append(
+                f'<polygon points="{pts}" fill="{color}22" stroke="{color}" stroke-width="2.2"/>'
+            )
+
+        max_points = ' '.join(to_point(i, v) for i, v in enumerate(radar_data.max_scores or [100] * n))
+
+        legend_y = 470
+        legend_items = [('#2f80ed', '班级均分'), ('#9aa7b3', '满分线')]
+        legend_items.extend((colors[idx % len(colors)], f'学生 {sid[:6]}') for idx, (sid, _) in enumerate(radar_data.student_scores.items()))
+        legend_nodes = []
+        legend_x = 110
+        for idx, (color, label) in enumerate(legend_items):
+            x = legend_x + (idx % 3) * 170
+            y = legend_y + (idx // 3) * 24
+            legend_nodes.append(f'<circle cx="{x}" cy="{y}" r="5" fill="{color}"/>')
+            legend_nodes.append(f'<text x="{x + 12}" y="{y + 4}" font-size="11" fill="#334155">{label}</text>')
+
+        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="维度能力雷达图">
+<rect x="12" y="12" width="{width - 24}" height="{height - 24}" rx="20" fill="#ffffff" stroke="#e6edf5"/>
+<text x="{cx}" y="46" text-anchor="middle" font-size="20" font-weight="700" fill="#1f2937">维度能力雷达图</text>
+<text x="{cx}" y="68" text-anchor="middle" font-size="12" fill="#64748b">对比班级均分、满分线与学生在各维度上的表现</text>
+{''.join(grid_rings)}
+{''.join(axis_lines)}
+<polygon points="{max_points}" fill="#9aa7b308" stroke="#9aa7b3" stroke-width="1.2" stroke-dasharray="4 4"/>
+{avg_polygon}
+{''.join(student_polygons)}
+{''.join(label_nodes)}
+{''.join(legend_nodes)}
+</svg>"""
         return svg
 
-    # ── PDF 生成 (reportlab) ────────────────
-
     def _generate_pdf(self, data: Dict) -> Optional[str]:
+        _patch_hashlib_usedforsecurity_compat()
         """使用 reportlab 生成 PDF"""
         try:
             from reportlab.lib.pagesizes import A4
@@ -592,21 +757,21 @@ class ReportGenerator:
             f"report_{data['assignment_id']}{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         )
 
-        doc = SimpleDocTemplate(output_path, pagesize=A4)
+        doc = SimpleDocTemplate(output_path, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=18 * mm, bottomMargin=16 * mm)
         styles = getSampleStyleSheet()
 
         # 中文字体样式
         cn_title = ParagraphStyle(
             "CNTitle", parent=styles["Title"],
-            fontName=font_name, fontSize=18,
+            fontName=font_name, fontSize=20, leading=24, spaceAfter=6,
         )
         cn_normal = ParagraphStyle(
             "CNNormal", parent=styles["Normal"],
-            fontName=font_name, fontSize=10,
+            fontName=font_name, fontSize=10, leading=15,
         )
         cn_heading = ParagraphStyle(
             "CNHeading", parent=styles["Heading2"],
-            fontName=font_name, fontSize=14,
+            fontName=font_name, fontSize=14, leading=18, spaceBefore=6, spaceAfter=4,
         )
         cn_small = ParagraphStyle(
             "CNSmall", parent=styles["Normal"],
@@ -625,7 +790,7 @@ class ReportGenerator:
         elements.append(Paragraph(
             f"{report_title} - {data['assignment_title']}", cn_title
         ))
-        elements.append(Spacer(1, 10 * mm))
+        elements.append(Spacer(1, 7 * mm))
 
         # 概要
         summary_text = (
@@ -649,7 +814,7 @@ class ReportGenerator:
             elements.append(Paragraph("评分维度雷达图", cn_heading))
             elements.append(Spacer(1, 3 * mm))
             try:
-                img = Image(data["radar_img_path"], width=400, height=400)
+                img = Image(data["radar_img_path"], width=440, height=400)
                 elements.append(img)
                 elements.append(Spacer(1, 5 * mm))
             except Exception as e:
@@ -669,7 +834,7 @@ class ReportGenerator:
                     f"{stats['min']:.1f}",
                     str(stats["count"]),
                 ])
-            dim_table = Table(dim_table_data, colWidths=[100, 60, 60, 60, 50])
+            dim_table = Table(dim_table_data, colWidths=[170, 68, 68, 68, 52])
             dim_table.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4a90d9")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -735,18 +900,18 @@ class ReportGenerator:
             appeal = {
                 "none": "", "pending": "待处理",
                 "approved": "已批准", "rejected": "已驳回"
-            }.get(row["appeal_status"], "")
+            }.get(row["appeal_status"], translate_appeal_status(row["appeal_status"]))
             rank = str(row["rank"]) if row.get("rank") else "-"
             table_data.append([
                 rank,
                 row["student_name"],
-                row["status"],
+                row.get("status_display") or translate_submission_status(row["status"]),
                 score,
                 plag,
                 appeal,
             ])
 
-        col_widths = [40, 80, 60, 50, 40, 60]
+        col_widths = [36, 86, 66, 52, 38, 62]
         table = Table(table_data, colWidths=col_widths)
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
@@ -758,6 +923,20 @@ class ReportGenerator:
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
         ]))
         elements.append(table)
+
+        detailed_rows = [row for row in data["submissions"] if row.get("grading_evidence")]
+        if detailed_rows:
+            elements.append(Spacer(1, 6 * mm))
+            elements.append(Paragraph("评分依据明细", cn_heading))
+            elements.append(Spacer(1, 3 * mm))
+            for row in detailed_rows:
+                elements.append(Paragraph(
+                    f"{row['student_name']}（{row['score'] if row['score'] is not None else '-'}分）",
+                    cn_normal,
+                ))
+                for item in row.get("grading_evidence", []):
+                    elements.append(Paragraph(f"  - {item}", cn_small))
+                elements.append(Spacer(1, 2 * mm))
 
         # 生成时间
         elements.append(Spacer(1, 10 * mm))
@@ -806,8 +985,9 @@ class ReportGenerator:
 
     # ── HTML fallback ───────────────────────
 
+
     def _generate_html(self, data: Dict) -> str:
-        """HTML 报告（含内联 SVG 雷达图 + 课件依据）"""
+        """生成 HTML 报告，内联 SVG 雷达图与结构化说明。"""
         config: ReportConfig = data.get("config", ReportConfig(
             assignment_id=data["assignment_id"]
         ))
@@ -821,135 +1001,215 @@ class ReportGenerator:
             f"report_{data['assignment_id']}{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
         )
 
-        # ── 学生成绩表行 ──
         rows_html = ""
         for row in data["submissions"]:
             score = f"{row['score']:.1f}" if row['score'] is not None else "-"
-            plag_icon = "⚠️" if row["plagiarized"] else ""
+            plag_icon = "是" if row["plagiarized"] else ""
             appeal_badge = {
-                "none": "", "pending": '<span style="color:orange">待处理</span>',
-                "approved": '<span style="color:green">已批准</span>',
-                "rejected": '<span style="color:red">已驳回</span>',
-            }.get(row["appeal_status"], "")
+                "none": "",
+                "pending": '<span class="badge badge-warn">待处理</span>',
+                "approved": '<span class="badge badge-good">已批准</span>',
+                "rejected": '<span class="badge badge-bad">已驳回</span>',
+            }.get(row["appeal_status"], translate_appeal_status(row["appeal_status"]))
             rank = str(row.get("rank", "-"))
 
             dim_html = ""
-            if row.get("dimension_scores"):
-                dim_parts = []
-                for k, v in row["dimension_scores"].items():
-                    bar_color = "#4caf50" if v >= 70 else "#ff9800" if v >= 50 else "#f44336"
-                    dim_parts.append(
-                        f'<span style="margin-right:10px">{k}: '
-                        f'<b style="color:{bar_color}">{v:.1f}</b></span>'
-                    )
-                dim_html = "<br><small>" + " | ".join(dim_parts) + "</small>"
+            dim_scores = row.get("dimension_scores_display") or row.get("dimension_scores")
+            if dim_scores:
+                chips = []
+                for k, v in dim_scores.items():
+                    tone = "good" if v >= 70 else "mid" if v >= 50 else "low"
+                    chips.append(f'<span class="dim-chip {tone}">{k}: <b>{v:.1f}</b></span>')
+                dim_html = '<div class="dim-chip-row">' + ''.join(chips) + '</div>'
 
+            feedback = localize_user_text(row['feedback'] or '')
             rows_html += f"""
             <tr>
                 <td>{rank}</td>
                 <td>{row['student_name']}</td>
-                <td>{row['status']}</td>
+                <td>{row.get('status_display') or translate_submission_status(row['status'])}</td>
                 <td><b>{score}</b></td>
                 <td>{plag_icon}</td>
                 <td>{appeal_badge}</td>
-                <td style="text-align:left;font-size:0.85em">{row['feedback'][:80]}{dim_html}</td>
+                <td class="text-left">{feedback[:120]}{dim_html}</td>
             </tr>"""
 
-        # ── 维度统计表 ──
+        grading_evidence_html = ""
+        evidence_rows = [row for row in data["submissions"] if row.get("grading_evidence")]
+        if evidence_rows:
+            cards = []
+            for row in evidence_rows:
+                row_score = f"{row['score']:.1f}" if row['score'] is not None else "-"
+                items = "".join(
+                    f"<li>{item}</li>"
+                    for item in row.get("grading_evidence", [])
+                )
+                detail_html = self._build_row_detail_html(row)
+                cards.append(f"""
+                <article class="detail-card">
+                    <div class="detail-head">
+                        <h3>{row['student_name']}</h3>
+                        <span class="score-pill">{row_score} 分</span>
+                    </div>
+                    <ul class="detail-list">{items}</ul>
+                    {detail_html}
+                </article>""")
+            grading_evidence_html = '<section class="section"><div class="section-head"><h2>评分依据</h2><p>展示每位学生的维度得分依据与结构化扣分信息。</p></div>' + ''.join(cards) + '</section>'
+
         dim_stats_html = ""
         if data.get("dim_stats"):
-            dim_stats_html = '<h2>维度统计</h2><table><tr><th>维度</th><th>平均分</th><th>最高分</th><th>最低分</th><th>人数</th></tr>'
+            rows = []
             for dim_name, stats in data["dim_stats"].items():
-                avg_color = "#4caf50" if stats["avg"] >= 70 else "#ff9800" if stats["avg"] >= 50 else "#f44336"
-                dim_stats_html += f'<tr><td>{dim_name}</td><td style="color:{avg_color};font-weight:bold">{stats["avg"]:.1f}</td><td>{stats["max"]:.1f}</td><td>{stats["min"]:.1f}</td><td>{stats["count"]}</td></tr>'
-            dim_stats_html += '</table>'
+                avg_color = "#2e7d32" if stats["avg"] >= 70 else "#ef6c00" if stats["avg"] >= 50 else "#c62828"
+                rows.append(
+                    f'<tr><td class="text-left">{dim_name}</td><td style="color:{avg_color};font-weight:700">{stats["avg"]:.1f}</td><td>{stats["max"]:.1f}</td><td>{stats["min"]:.1f}</td><td>{stats["count"]}</td></tr>'
+                )
+            dim_stats_html = '<section class="section"><div class="section-head"><h2>维度统计</h2><p>查看各评分维度在班级中的平均、最高、最低分表现。</p></div><div class="table-wrap"><table><tr><th>维度</th><th>平均分</th><th>最高分</th><th>最低分</th><th>人数</th></tr>' + ''.join(rows) + '</table></div></section>'
 
-        # ── 雷达图 SVG ──
         radar_html = ""
         radar_data: Optional[RadarData] = data.get("radar_data")
         if radar_data and radar_data.dimensions:
             svg = self._generate_radar_svg(radar_data)
             if svg:
-                radar_html = f'<h2>评分维度雷达图</h2><div style="text-align:center">{svg}</div>'
+                radar_html = f'<section class="section"><div class="section-head"><h2>维度雷达图</h2><p>对比班级平均水平、满分线和指定学生在各维度上的表现。</p></div><div class="chart-card">{svg}</div></section>'
 
-        # ── 课件依据 ──
         evidence_html = ""
         evidences = data.get("evidences")
         if evidences:
-            evidence_html = '<h2>课件依据与改进建议</h2>'
+            cards = []
             for ev in evidences:
-                level_icon = {"weak": "🔴", "medium": "🟡", "strong": "🟢"}.get(ev.weakness_level, "⚪")
-                level_text = {"weak": "薄弱", "medium": "中等", "strong": "良好"}.get(ev.weakness_level, "未知")
-                bg_color = {"weak": "#fff3f3", "medium": "#fffbe6", "strong": "#f0fff0"}.get(ev.weakness_level, "#f5f5f5")
-
+                level_text = {"weak": "薄弱", "medium": "中等", "strong": "良好"}.get(ev.weakness_level, "待观察")
+                level_color = {"weak": "#c62828", "medium": "#ef6c00", "strong": "#2e7d32"}.get(ev.weakness_level, "#546e7a")
                 refs_html = ""
                 if ev.courseware_refs:
-                    refs_items = "".join([f'<li style="font-size:0.9em">{ref[:150]}</li>' for ref in ev.courseware_refs])
-                    refs_html = f'<p style="margin:5px 0"><b>课件依据:</b></p><ul style="margin:2px 0 2px 15px">{refs_items}</ul>'
-
+                    refs_items = "".join([f'<li>{ref[:150]}</li>' for ref in ev.courseware_refs])
+                    refs_html = f'<div class="evidence-block"><h4>课件依据</h4><ul>{refs_items}</ul></div>'
                 tips_html = ""
                 if ev.improvement_tips:
-                    tips_items = "".join([f'<li style="font-size:0.9em">{tip}</li>' for tip in ev.improvement_tips])
-                    tips_html = f'<p style="margin:5px 0"><b>改进建议:</b></p><ul style="margin:2px 0 2px 15px">{tips_items}</ul>'
-
-                evidence_html += f'''
-                <div style="background:{bg_color};padding:12px;border-radius:8px;margin:10px 0;border-left:4px solid {
-                    "#e74c3c" if ev.weakness_level == "weak" else "#f39c12" if ev.weakness_level == "medium" else "#27ae60"
-                }">
-                    <p style="margin:0"><b>{level_icon} {ev.dimension_name}</b> — 平均 {ev.avg_score:.1f}/{ev.max_score:.0f} ({level_text})</p>
+                    tips_items = "".join([f'<li>{tip}</li>' for tip in ev.improvement_tips])
+                    tips_html = f'<div class="evidence-block"><h4>改进建议</h4><ul>{tips_items}</ul></div>'
+                cards.append(f"""
+                <article class="insight-card">
+                    <div class="insight-head">
+                        <h3>{ev.dimension_name}</h3>
+                        <span class="level-pill" style="background:{level_color}15;color:{level_color};border-color:{level_color}55">{level_text}</span>
+                    </div>
+                    <p class="metric-line">平均分 {ev.avg_score:.1f} / {ev.max_score:.0f}</p>
                     {refs_html}
                     {tips_html}
-                </div>'''
+                </article>""")
+            evidence_html = '<section class="section"><div class="section-head"><h2>维度薄弱项分析</h2><p>根据班级维度表现汇总课件依据与改进建议。</p></div><div class="insight-grid">' + ''.join(cards) + '</div></section>'
 
         dim_headers = ""
         if data["rubric_dimensions"]:
-            dim_headers = "<p>评分维度: " + ", ".join(data["rubric_dimensions"]) + "</p>"
+            dim_headers = ''.join(f'<span class="meta-chip">{name}</span>' for name in data["rubric_dimensions"])
 
-        # 报告类型标题
-        report_title = "📊 批改报告"
+        report_title = "班级批改报告"
         if config.report_type == ReportType.STUDENT_DETAIL:
-            report_title = "👤 学生个人报告"
+            report_title = "学生详细报告"
         elif config.report_type == ReportType.RADAR_COMPARISON:
-            report_title = "📈 雷达图对比报告"
+            report_title = "雷达对比报告"
 
         html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{report_title} - {data['assignment_title']}</title>
 <style>
-body {{ font-family: "Microsoft YaHei", "PingFang SC", sans-serif; margin: 20px; max-width: 1100px; }}
-h1 {{ color: #333; border-bottom: 2px solid #4a90d9; padding-bottom: 10px; }}
-h2 {{ color: #4a90d9; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-top: 30px; }}
-.summary {{ background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0; }}
-table {{ border-collapse: collapse; width: 100%; margin-top: 15px; }}
-th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: center; }}
-th {{ background: #4a90d9; color: white; }}
-tr:nth-child(even) {{ background: #f9f9f9; }}
-.evidence-section {{ margin-top: 30px; }}
+:root {{
+  --bg: #f4f7fb;
+  --card: #ffffff;
+  --line: #dbe4ee;
+  --ink: #1f2937;
+  --muted: #64748b;
+  --brand: #1f6feb;
+  --brand-soft: #eaf2ff;
+  --good: #2e7d32;
+  --mid: #ef6c00;
+  --bad: #c62828;
+}}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; background: linear-gradient(180deg, #f7fbff 0%, var(--bg) 100%); color: var(--ink); font-family: "Microsoft YaHei", "PingFang SC", sans-serif; line-height: 1.6; }}
+.main {{ max-width: 1180px; margin: 0 auto; padding: 28px 20px 48px; }}
+.hero {{ background: linear-gradient(135deg, #ffffff 0%, #edf5ff 100%); border: 1px solid var(--line); border-radius: 24px; padding: 28px; box-shadow: 0 18px 48px rgba(31, 41, 55, 0.06); }}
+.hero h1 {{ margin: 0 0 10px; font-size: 30px; line-height: 1.25; }}
+.hero p {{ margin: 0; color: var(--muted); }}
+.meta-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-top: 22px; }}
+.meta-card {{ background: rgba(255,255,255,0.78); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; }}
+.meta-card .label {{ display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }}
+.meta-card .value {{ font-size: 24px; font-weight: 700; }}
+.meta-chip-row {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }}
+.meta-chip {{ display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 999px; background: var(--brand-soft); color: #2257b7; font-size: 13px; font-weight: 600; }}
+.section {{ margin-top: 26px; background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 24px; box-shadow: 0 14px 36px rgba(15, 23, 42, 0.05); }}
+.section-head {{ margin-bottom: 18px; }}
+.section-head h2 {{ margin: 0 0 6px; font-size: 24px; }}
+.section-head p {{ margin: 0; color: var(--muted); }}
+.chart-card {{ background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); border: 1px solid #e8eef6; border-radius: 22px; padding: 14px; overflow-x: auto; }}
+.table-wrap {{ overflow-x: auto; }}
+table {{ width: 100%; border-collapse: collapse; min-width: 760px; }}
+th, td {{ border-bottom: 1px solid #ebf0f5; padding: 12px 14px; text-align: center; vertical-align: top; }}
+th {{ background: #f3f7fc; color: #355070; font-size: 13px; text-transform: uppercase; letter-spacing: 0.03em; }}
+tr:hover td {{ background: #fbfdff; }}
+.text-left {{ text-align: left; }}
+.dim-chip-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
+.dim-chip {{ display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 999px; background: #eef3f8; color: #334155; font-size: 12px; }}
+.dim-chip.good {{ background: #edf7ee; color: var(--good); }}
+.dim-chip.mid {{ background: #fff4e8; color: var(--mid); }}
+.dim-chip.low {{ background: #fdecec; color: var(--bad); }}
+.badge {{ display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }}
+.badge-good {{ background: #edf7ee; color: var(--good); }}
+.badge-warn {{ background: #fff4e8; color: var(--mid); }}
+.badge-bad {{ background: #fdecec; color: var(--bad); }}
+.insight-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }}
+.insight-card, .detail-card {{ background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%); border: 1px solid #e8eef6; border-radius: 20px; padding: 18px; }}
+.insight-head, .detail-head {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }}
+.insight-head h3, .detail-head h3 {{ margin: 0; font-size: 18px; }}
+.level-pill, .score-pill {{ display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 999px; border: 1px solid transparent; font-size: 12px; font-weight: 700; }}
+.score-pill {{ background: #eef4ff; color: #2257b7; border-color: #cfe0ff; }}
+.metric-line {{ margin: 0 0 12px; color: var(--muted); font-size: 14px; }}
+.evidence-block h4 {{ margin: 10px 0 6px; font-size: 14px; }}
+.evidence-block ul, .detail-list {{ margin: 0; padding-left: 18px; }}
+.evidence-block li, .detail-list li {{ margin: 6px 0; }}
+.footer-note {{ margin-top: 20px; color: var(--muted); font-size: 13px; text-align: right; }}
+@media (max-width: 768px) {{
+  .main {{ padding: 18px 14px 36px; }}
+  .hero {{ padding: 20px; border-radius: 20px; }}
+  .hero h1 {{ font-size: 24px; }}
+  .section {{ padding: 18px; border-radius: 20px; }}
+  .section-head h2 {{ font-size: 20px; }}
+}}
 </style>
 </head>
 <body>
-<h1>{report_title} - {data['assignment_title']}</h1>
-<div class="summary">
-<p>提交数: <b>{data['total_submissions']}</b> | 平均分: <b>{data['avg_score']}</b>
- | 中位数: <b>{data.get('median_score', 0)}</b>
- | 最高分: <b>{data['max_score']}</b> | 最低分: <b>{data['min_score']}</b></p>
-{dim_headers}
-<p>生成时间: {data['generated_at']}</p>
+<div class="main">
+  <section class="hero">
+    <h1>{report_title}</h1>
+    <p>{data['assignment_title']}</p>
+    <div class="meta-grid">
+      <div class="meta-card"><span class="label">提交人数</span><span class="value">{data['total_submissions']}</span></div>
+      <div class="meta-card"><span class="label">平均分</span><span class="value">{data['avg_score']}</span></div>
+      <div class="meta-card"><span class="label">中位数</span><span class="value">{data.get('median_score', 0)}</span></div>
+      <div class="meta-card"><span class="label">最高分</span><span class="value">{data['max_score']}</span></div>
+      <div class="meta-card"><span class="label">最低分</span><span class="value">{data['min_score']}</span></div>
+    </div>
+    <div class="meta-chip-row">{dim_headers}</div>
+    <p class="footer-note">生成时间：{data['generated_at']}</p>
+  </section>
+  {radar_html}
+  {dim_stats_html}
+  {evidence_html}
+  {grading_evidence_html}
+  <section class="section">
+    <div class="section-head"><h2>学生明细</h2><p>查看学生分数、状态、申诉情况与评语摘要。</p></div>
+    <div class="table-wrap">
+      <table>
+        <tr><th>排名</th><th>学生</th><th>状态</th><th>总分</th><th>查重</th><th>申诉</th><th>评语摘要</th></tr>
+        {rows_html}
+      </table>
+    </div>
+  </section>
 </div>
-
-{radar_html}
-
-{dim_stats_html}
-
-{evidence_html}
-
-<h2>学生成绩明细</h2>
-<table>
-<tr><th>排名</th><th>学生</th><th>状态</th><th>分数</th><th>抄袭</th><th>申诉</th><th>反馈</th></tr>
-{rows_html}
-</table>
 </body>
 </html>"""
 
@@ -958,8 +1218,6 @@ tr:nth-child(even) {{ background: #f9f9f9; }}
 
         logger.info(f"HTML 报告已生成: {output_path}")
         return output_path
-
-    # ── 缓存 ────────────────────────────────
 
     def _cache_key(self, assignment_id: str,
                    report_type: str = "",

@@ -139,6 +139,11 @@ class GradingResult:
     total_score: float
     feedback: str
     confidence: float       # 0~1，AI 批改置信度
+    confidence_label: str = "medium"      # high / medium / low
+    grading_context: str = ""             # AI 使用的完整上下文
+    gain_points: Dict[str, List[str]] = field(default_factory=dict)
+    deductions: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    regrade_diff: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     graded_by: str = "ai"  # ai / ta / teacher
     graded_at: datetime = field(default_factory=datetime.now)
     appeal_count: int = 0
@@ -155,6 +160,10 @@ class Appeal:
     status: str = "pending"   # pending / approved / rejected
     new_score: Optional[float] = None
     reviewed_by: Optional[str] = None
+    ai_feedback: str = ""
+    ai_confidence: Optional[float] = None
+    ai_confidence_label: str = ""
+    regrade_result: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -7,6 +7,8 @@ import os
 from typing import Optional
 from pathlib import Path
 
+from runtime.encoding import read_text_file
+
 
 class FileParser:
     """多格式文件解析 → 纯文本"""
@@ -60,14 +62,10 @@ class FileParser:
 
     def _parse_text(self, file_path: str) -> str:
         """解析纯文本/Markdown/CSV"""
-        encodings = ["utf-8", "gbk", "gb2312", "latin-1"]
-        for enc in encodings:
-            try:
-                with open(file_path, "r", encoding=enc) as f:
-                    return f.read()
-            except (UnicodeDecodeError, UnicodeError):
-                continue
-        return f"[无法解码文件: {file_path}]"
+        try:
+            return read_text_file(file_path)
+        except OSError:
+            return f"[无法解码文件: {file_path}]"
 
     def detect_title(self, file_path: str, content: str) -> str:
         """从文件名或内容推断标题"""

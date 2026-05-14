@@ -251,6 +251,45 @@ class IntentRouter:
             return IntentResult(IntentType.SET_RUBRIC, 0.9, session_id, slots=slots)
 
         elif waiting == SessionState.WAITING_RUBRIC_APPROVAL:
+            content = (message.content or "").strip()
+            assignment_prefixes = ("布置作业", "发布作业", "设置作业", "新建作业")
+            if any(content.startswith(prefix) for prefix in assignment_prefixes):
+                fresh_slots = self._extract_slots(IntentType.SET_ASSIGNMENT, content)
+                self.db.save_session(
+                    session_id=session_id,
+                    user_id=message.user_id,
+                    intent=IntentType.SET_ASSIGNMENT,
+                    waiting_for=None,
+                    slots=fresh_slots,
+                )
+                return IntentResult(
+                    IntentType.SET_ASSIGNMENT,
+                    0.95,
+                    session_id,
+                    slots=fresh_slots,
+                )
+
+            # If user sends a new command (e.g. "发布作业"), break out of
+            # rubric-approval flow and re-classify as a fresh intent.
+            new_cmd_intents = [
+                IntentType.SET_ASSIGNMENT,
+                IntentType.SUBMIT_HOMEWORK,
+                IntentType.UPLOAD_COURSEWARE,
+                IntentType.APPEAL,
+                IntentType.VIEW_REPORT,
+                IntentType.QUERY_PROGRESS,
+            ]
+            fresh = self._classify_fresh(message)
+            if fresh and fresh.intent in new_cmd_intents:
+                self.db.save_session(
+                    session_id=session_id,
+                    user_id=message.user_id,
+                    intent=fresh.intent,
+                    waiting_for=None,
+                    slots=fresh.slots,
+                )
+                return fresh
+
             slots["teacher_reply"] = message.content
             self.db.save_session(
                 session_id=session_id,
@@ -295,6 +334,23 @@ class IntentRouter:
         if message.group_id:
             return f"sess_{message.user_id}_{message.group_id}"
         return f"sess_{message.user_id}"
+
+    def _classify_fresh(self, message: QQMessage) -> IntentResult | None:
+        """Pure keyword classification ignoring session state."""
+        content = message.content.strip()
+        best_intent = None
+        best_score = 0.0
+        for rule in INTENT_RULES:
+            score = 0.0
+            for kw in rule["keywords"]:
+                if kw in content:
+                    score += 0.4
+            if score > best_score:
+                best_score = score
+                best_intent = rule["intent"]
+        if best_score >= 0.4 and best_intent:
+            return IntentResult(best_intent, min(best_score, 1.0), self._get_session_id(message), slots=self._extract_slots(best_intent, content))
+        return None
 
     def _is_ta_message(self, message: QQMessage) -> bool:
         session_id = self._get_session_id(message)

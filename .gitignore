@@ -60,7 +60,9 @@ mvp/src/data/course_assistant.db
 reports/
 run_logs/
 botpy.log
+botpy.log.*
 bot_runtime.log
 bot_runtime.err.log
 data/uploads/
 src/runtime/__pycache__/
+mvp/src/runtime/__pycache__/

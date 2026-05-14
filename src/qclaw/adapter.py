@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
+import threading
 from datetime import datetime
 from typing import Any, Awaitable, Callable, List, Optional
 
@@ -119,6 +121,8 @@ class QclawAdapter:
         self._channel_message_handler: Optional[Callable[[QQMessage], Awaitable[None]]] = None
         self._running = False
         self._injected_messages: List[QQMessage] = []
+        self._recent_dispatch_ids: dict = {}  # msg_id -> timestamp for dedup
+        self._dispatch_lock = threading.Lock()
 
     def _build_client(self) -> Any:
         try:
@@ -181,7 +185,30 @@ class QclawAdapter:
         self._channel_message_handler = handler
 
     async def _dispatch(self, msg: QQMessage):
-        logger.info("Received message: user=%s content=%s", msg.user_id, msg.content[:50])
+        # Dedup: botpy may fire multiple events for the same underlying message.
+        now = datetime.now().timestamp()
+        content_norm = re.sub(r"\s+", " ", (msg.content or "").strip())
+        file_part = msg.file_url or msg.file_name or ""
+        keys = []
+        if msg.message_id:
+            keys.append(f"id:{msg.message_id}")
+        keys.append(f"body:{msg.user_id}:{content_norm}:{file_part}")
+
+        is_dup = any(k in self._recent_dispatch_ids for k in keys)
+        logger.info(
+            "Dispatch: user=%s msg_id=%s dup=%s keys=%s",
+            msg.user_id, msg.message_id, is_dup, keys,
+        )
+        if is_dup:
+            return
+        for k in keys:
+            self._recent_dispatch_ids[k] = now
+        # Prune old entries (keep last 60 seconds)
+        cutoff = now - 60.0
+        self._recent_dispatch_ids = {
+            k: v for k, v in self._recent_dispatch_ids.items() if v > cutoff
+        }
+
         handled = False
         if msg.message_type == MessageType.GROUP and self._group_message_handler:
             await self._group_message_handler(msg)

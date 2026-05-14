@@ -33,6 +33,7 @@ from contracts.models import (
     RubricDimension,
     SearchResult,
 )
+from runtime.localization import localize_dimension_name, localize_user_text
 from storage.db import DB
 
 logger = logging.getLogger("grading")
@@ -55,7 +56,28 @@ class GradingEngine:
     def __init__(self, db: DB, model: str = None):
         self.db = db
         self._client = None
-        self._timeout = int(os.environ.get("LLM_TIMEOUT", "60"))
+        self._timeout = int(os.environ.get("LLM_TIMEOUT", "90"))
+        self._min_timeout = int(os.environ.get("LLM_MIN_TIMEOUT", "45"))
+        self._max_retries = int(os.environ.get("LLM_MAX_RETRIES", "0"))
+        self._fast_grading_timeout = min(
+            self._timeout,
+            int(os.environ.get("LLM_GRADING_FAST_TIMEOUT", "35")),
+        )
+        self._grading_timeout_chars_step = int(
+            os.environ.get("LLM_GRADING_TIMEOUT_CHARS_STEP", "1800")
+        )
+        self._grading_timeout_step_seconds = int(
+            os.environ.get("LLM_GRADING_TIMEOUT_STEP_SECONDS", "20")
+        )
+        self._grading_fast_excerpt_chars = int(
+            os.environ.get("LLM_GRADING_FAST_EXCERPT_CHARS", "2200")
+        )
+        self._grading_full_excerpt_chars = int(
+            os.environ.get("LLM_GRADING_FULL_EXCERPT_CHARS", "5000")
+        )
+        self._grading_full_timeout_floor = int(
+            os.environ.get("LLM_GRADING_FULL_TIMEOUT", "0")
+        )
         self._grading_log_dir = Path("run_logs") / "grading"
         self._grading_log_dir.mkdir(parents=True, exist_ok=True)
         self._rubric_log_dir = Path("run_logs") / "rubrics"
@@ -63,10 +85,22 @@ class GradingEngine:
         self._provider, self.model, self._api_key, self._base_url = self._resolve_config(
             model
         )
+        self._fast_grading_model = (
+            os.environ.get("LLM_GRADING_FAST_MODEL", "").strip()
+            or os.environ.get("OPENAI_FAST_MODEL", "").strip()
+            or os.environ.get("ZHIPUAI_FAST_MODEL", "").strip()
+            or self.model
+        )
         logger.info(
-            "Grading engine configured: provider=%s, model=%s",
+            "Grading engine configured: provider=%s, model=%s, timeout=%ss, min_timeout=%ss, "
+            "fast_model=%s, max_retries=%s, grading_full_timeout_floor=%ss",
             self._provider,
             self.model,
+            self._timeout,
+            self._min_timeout,
+            self._fast_grading_model,
+            self._max_retries,
+            self._grading_full_timeout_floor,
         )
 
     @staticmethod
@@ -108,6 +142,7 @@ class GradingEngine:
                 kwargs = {"api_key": self._api_key}
                 if self._base_url:
                     kwargs["base_url"] = self._base_url
+                kwargs["max_retries"] = self._max_retries
                 # Ignore broken system proxy settings so local QQ bot grading
                 # can reach the model endpoint directly.
                 kwargs["http_client"] = httpx.Client(
@@ -198,7 +233,11 @@ class GradingEngine:
                 max_tokens=900,
                 timeout=self._timeout,
             )
-            return (response.choices[0].message.content or "").strip()
+            msg = response.choices[0].message
+            text = (msg.content or "").strip()
+            if not text:
+                text = (getattr(msg, "reasoning_content", None) or "").strip()
+            return text
         except Exception as e:
             logger.warning("AI question answering failed: %s", e)
             return ""
@@ -270,50 +309,18 @@ class GradingEngine:
             previous_block = json.dumps(previous_draft, ensure_ascii=False, indent=2)
 
         feedback_block = teacher_feedback.strip() or "None"
-        prompt = f"""You are an expert instructional designer and grading specialist.
+        prompt = f"""为以下作业创建评分标准。返回纯JSON，不要markdown。
+所有面向教师和学生展示的字段必须使用简体中文，包括 title、summary、teacher_message、dimensions.name、dimensions.description、grading_focus、hard_rules。
 
-Create a grading rubric for the assignment below. The rubric must be concrete, observable, and directly usable for scoring student work.
+作业：{assignment_title}
+要求：{assignment_requirement}
+课程：{course_id}
+{f'之前的草案：{previous_block}' if previous_block else ''}
+{f'教师修改意见：{feedback_block}' if teacher_feedback.strip() else ''}
 
-## Course
-{course_id}
+JSON格式：{{"title":"标题","summary":"简要说明","teacher_message":"给教师的提示","dimensions":[{{"name":"维度名","weight":0.25,"description":"说明","max_score":100,"grading_focus":["要点1","要点2"]}}],"hard_rules":[]}}
 
-## Assignment Title
-{assignment_title}
-
-## Assignment Requirement
-{assignment_requirement}
-
-## Previous Draft
-{previous_block or "None"}
-
-## Teacher Revision Feedback
-{feedback_block}
-
-## Rubric Rules
-1. Return JSON only. Do not include markdown fences or commentary outside JSON.
-2. Provide 3 to 6 scoring dimensions.
-3. Each dimension must have a short, specific, gradeable description.
-4. Dimension weights must sum to 1.0.
-5. Use Chinese for teacher-facing text.
-6. Keep hard rules empty unless the requirement clearly implies objective penalties.
-7. Revise the draft when teacher feedback is provided instead of repeating the old version.
-
-## Output JSON Schema
-{{
-  "title": "评分标准标题",
-  "summary": "这一版评分标准如何贴合作业要求的简短说明",
-  "teacher_message": "给老师的简短确认提示",
-  "dimensions": [
-    {{
-      "name": "维度名称",
-      "weight": 0.35,
-      "description": "可直接用于评分的维度说明",
-      "max_score": 100,
-      "grading_focus": ["2到4个可观察要点"]
-    }}
-  ],
-  "hard_rules": ["可选的客观扣分规则"]
-}}"""
+要求：3-5个维度，权重之和为1.0，description简短具体可评分。"""
 
         logger.info(
             "Calling %s model=%s for rubric draft course=%s title=%s",
@@ -329,22 +336,33 @@ Create a grading rubric for the assignment below. The rubric must be concrete, o
                     {
                         "role": "system",
                         "content": (
-                            "You are an expert instructional designer. "
-                            "Return valid JSON only. "
-                            "The rubric must be specific, structured, and directly usable for grading."
+                            "你是评分标准设计专家。只返回JSON，不要markdown或其他文字。"
+                            "所有可读字段都必须使用简体中文。"
                         ),
                     },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.2,
-                max_tokens=1400,
+                max_tokens=800,
                 timeout=self._timeout,
             )
-            raw = (response.choices[0].message.content or "").strip()
+            msg = response.choices[0].message
+            raw = (msg.content or "").strip()
+            # GLM-4.x models may put JSON in reasoning_content
+            if not raw:
+                raw = (getattr(msg, "reasoning_content", None) or "").strip()
             logger.info("AI rubric raw response for title=%s: %s", assignment_title, raw[:3000])
             payload = self._extract_json_payload(raw)
             if not payload:
-                raise ValueError("AI did not return parseable JSON for the rubric draft.")
+                logger.error(
+                    "AI rubric JSON parse failed for title=%s. Raw response (first 500 chars): %s",
+                    assignment_title,
+                    raw[:500],
+                )
+                raise ValueError(
+                    f"AI did not return parseable JSON for the rubric draft. "
+                    f"Raw response: {raw[:200]}"
+                )
 
             normalized = self._normalize_rubric_payload(payload, assignment_title)
             normalized["assignment_title"] = assignment_title
@@ -442,81 +460,118 @@ Create a grading rubric for the assignment below. The rubric must be concrete, o
         appeal_reason: str = "",
         existing_result: Optional[GradingResult] = None,
     ) -> GradingResult:
-        dim_desc = "\n".join(
-            f"- {d.name} (weight {d.weight:.0%}): {d.description or 'No description'}"
-            for d in rubric.dimensions
+        submission_content = submission.content or ""
+        dynamic_plan = self._build_dynamic_grading_plan(submission_content)
+        logger.info(
+            "Dynamic grading plan for submission=%s: content_length=%s fast_timeout=%ss "
+            "estimated_full_timeout=%ss full_timeout=%ss fast_excerpt=%s full_excerpt=%s "
+            "fast_max_tokens=%s full_max_tokens=%s",
+            submission.id,
+            dynamic_plan["content_length"],
+            dynamic_plan["fast_timeout"],
+            dynamic_plan["estimated_full_timeout"],
+            dynamic_plan["full_timeout"],
+            dynamic_plan["fast_excerpt_chars"],
+            dynamic_plan["full_excerpt_chars"],
+            dynamic_plan["fast_max_tokens"],
+            dynamic_plan["full_max_tokens"],
         )
-
+        reference_block = self._build_submission_reference_block(
+            submission,
+            rubric,
+            assignment_title,
+        )
         appeal_note = ""
         if appeal_reason:
             appeal_note = (
-                f"\n\n[Appeal Context]\nStudent appeal reason: {appeal_reason}\n"
-                "Re-evaluate the work and adjust scores if the appeal is justified."
+                f"\n\n【申诉背景】\n学生申诉原因：{appeal_reason}\n"
+                "请重新审阅作业；如果申诉成立，请调整相应分数。\n"
+                "同时说明哪些维度发生了变化，以及变化原因。"
             )
 
-        prompt = f"""You are a professional course TA. Grade the student's work by rubric dimensions.
-
-## Assignment
-{assignment_title or '(not specified)'}
-
-## Rubric
-{dim_desc}
-
-## Student Submission
-{submission.content[:3000]}
-{appeal_note}
-
-## Output Requirement
-Return JSON only:
-{{
-  "dimension_scores": {{
-    "dimension1": 0,
-    "dimension2": 0
-  }},
-  "feedback": "overall feedback and improvement suggestions",
-  "confidence": 0.0
-}}"""
+        prompt = self._build_grading_prompt(
+            rubric,
+            assignment_title,
+            reference_block,
+            submission_content[: dynamic_plan["full_excerpt_chars"]],
+            appeal_note,
+            compact=False,
+        )
+        fast_prompt = self._build_grading_prompt(
+            rubric,
+            assignment_title,
+            reference_block,
+            submission_content[: dynamic_plan["fast_excerpt_chars"]],
+            appeal_note,
+            compact=True,
+        )
 
         try:
-            logger.info(
-                "Calling %s model=%s for submission=%s",
-                self._provider,
-                self.model,
-                submission.id,
+            raw = self._request_grading_json(
+                submission_id=submission.id,
+                primary_model=self._fast_grading_model,
+                primary_prompt=fast_prompt,
+                primary_timeout=dynamic_plan["fast_timeout"],
+                fallback_model=self.model,
+                fallback_prompt=prompt,
+                fallback_timeout=dynamic_plan["full_timeout"],
+                fast_max_tokens=dynamic_plan["fast_max_tokens"],
+                full_max_tokens=dynamic_plan["full_max_tokens"],
             )
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a professional course TA. Return JSON only.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.3,
-                max_tokens=1000,
-                timeout=self._timeout,
-            )
-            raw = response.choices[0].message.content.strip()
-            logger.info("AI grading raw response for submission=%s: %s", submission.id, raw[:2000])
-            logger.debug("LLM raw response: %s", raw[:200])
             data = self._extract_json_payload(raw)
             if data:
                 dim_scores = self._normalize_dimension_scores(
                     data.get("dimension_scores", {}),
                     rubric,
                 )
+                gain_points = self._normalize_gain_points(
+                    data.get("gain_points", {}),
+                    rubric,
+                )
+                deductions = self._normalize_deductions(
+                    data.get("deductions", {}),
+                    rubric,
+                )
+                regrade_diff = self._normalize_regrade_diff(
+                    data.get("regrade_diff", {}),
+                    existing_result,
+                    dim_scores,
+                    rubric,
+                )
+                gain_points = self._localize_gain_points(gain_points)
+                deductions = self._localize_deductions(deductions)
+                regrade_diff = self._localize_regrade_diff(regrade_diff)
                 return GradingResult(
                     submission_id=submission.id,
                     dimension_scores=dim_scores,
                     total_score=self._calc_weighted_score(dim_scores, rubric),
-                    feedback=str(data.get("feedback", "")).strip(),
+                    feedback=localize_user_text(str(data.get("feedback", "")).strip()),
                     confidence=self._coerce_confidence(data.get("confidence", 0.7)),
+                    confidence_label=self._coerce_confidence_label(
+                        data.get("confidence_label"),
+                        data.get("confidence", 0.7),
+                    ),
+                    grading_context=self._build_grading_context(
+                        assignment_title,
+                        rubric,
+                        submission,
+                        appeal_reason=appeal_reason,
+                        reference_block=reference_block,
+                    ),
+                    gain_points=gain_points,
+                    deductions=deductions,
+                    regrade_diff=regrade_diff,
                     graded_by=f"ai:{self._provider}",
                     graded_at=datetime.now(),
                     appeal_count=existing_result.appeal_count if existing_result else 0,
                 )
             fallback_scores = self._extract_scores_from_text(raw, rubric)
+            fallback_diff = self._normalize_regrade_diff(
+                {},
+                existing_result,
+                fallback_scores,
+                rubric,
+            )
             if fallback_scores:
                 logger.info(
                     "Recovered non-JSON AI grading output for submission=%s via text parsing",
@@ -526,8 +581,19 @@ Return JSON only:
                     submission_id=submission.id,
                     dimension_scores=fallback_scores,
                     total_score=self._calc_weighted_score(fallback_scores, rubric),
-                    feedback=raw[:800].strip(),
+                    feedback=localize_user_text(raw[:800].strip()),
                     confidence=0.55,
+                    confidence_label="medium",
+                    grading_context=self._build_grading_context(
+                        assignment_title,
+                        rubric,
+                        submission,
+                        appeal_reason=appeal_reason,
+                        reference_block=reference_block,
+                    ),
+                    gain_points={dimension.name: [] for dimension in rubric.dimensions},
+                    deductions={dimension.name: [] for dimension in rubric.dimensions},
+                    regrade_diff=fallback_diff,
                     graded_by=f"ai:{self._provider}:text-fallback",
                     graded_at=datetime.now(),
                     appeal_count=existing_result.appeal_count if existing_result else 0,
@@ -537,6 +603,200 @@ Return JSON only:
             logger.warning("AI grading failed: %s, falling back to rules", e)
 
         return self._grade_with_rules(submission, rubric, existing_result=existing_result)
+
+    def _build_grading_prompt(
+        self,
+        rubric: Rubric,
+        assignment_title: str,
+        reference_block: str,
+        submission_excerpt: str,
+        appeal_note: str,
+        *,
+        compact: bool,
+    ) -> str:
+        dim_desc = "\n".join(
+            f"- {d.name}（权重 {d.weight:.0%}）：{d.description or '无说明'}"
+            for d in rubric.dimensions
+        )
+        hard_rule_block = ""
+        if rubric.hard_rules:
+            hard_rule_lines = "\n".join(f"- {rule}" for rule in rubric.hard_rules)
+            hard_rule_block = (
+                "\n硬性规则：\n"
+                f"{hard_rule_lines}\n"
+                "如果命中硬性规则，请直接在对应维度的 `dimension_scores` 和 `deductions` 中体现。"
+                "不要在总分上额外重复扣减。\n"
+            )
+        rubric_name_example = rubric.dimensions[0].name if rubric.dimensions else "维度1"
+        compact_note = (
+            "请优先输出紧凑、可解析的 JSON；每个维度最多保留 3 条加分点和 3 条扣分点。"
+            if compact
+            else "请尽量给出具体证据和扣分说明。"
+        )
+        return f"""你是一名课程助教，请按照评分标准逐维度批改学生作业。
+## 作业
+{assignment_title or '（未提供）'}
+
+## 评分标准
+{dim_desc}
+
+评分规则：
+1. 每个维度的原始分满分都是 100 分，不是按权重折算后的分数。
+2. 发现问题后按项扣分，最终维度分 = 100 - 总扣分。
+3. 维度权重只用于系统最终汇总总分，你返回的 `dimension_scores` 必须始终是 0 到 100 之间的原始分。
+4. 不要返回 40、30、20、10 这类“按权重折算后的维度实得分”。例如权重 40% 的维度拿到 95 分时，应返回 95，而不是 38。
+5. 除维度键名外，所有文字字段必须使用简体中文。
+{hard_rule_block}
+{compact_note}
+
+## 证据与上下文
+{reference_block}
+
+## 学生作业
+{submission_excerpt}
+{appeal_note}
+
+## 输出要求
+只返回 JSON，不要输出 markdown 或额外说明。维度键名必须严格使用评分标准中的原始名称，例如“{rubric_name_example}”：
+{{
+  "dimension_scores": {{
+    {self._format_dim_keys_example(rubric, '0')}
+  }},
+  "gain_points": {{
+    {self._format_dim_keys_example(rubric, '["学生做得好的地方"]')}
+  }},
+  "deductions": {{
+    {self._format_dim_keys_example(rubric, '[{{"point": "缺失或不正确之处", "deduct": 0, "evidence": "依据", "evidence_source": "来源"}}]')}
+  }},
+  "feedback": "总体评语与改进建议",
+  "confidence": 0.0,
+  "confidence_label": "high",
+  "regrade_diff": {{
+    {self._format_dim_keys_example(rubric, '{{"old": 0, "new": 0, "reason": "调整原因"}}')}
+  }}
+}}"""
+
+    def _build_dynamic_grading_plan(self, submission_content: str) -> Dict[str, int]:
+        content_length = len((submission_content or "").strip())
+        growth_steps = max(
+            0,
+            (content_length - self._grading_fast_excerpt_chars + self._grading_timeout_chars_step - 1)
+            // max(1, self._grading_timeout_chars_step),
+        )
+        estimated_full_timeout = min(
+            self._timeout,
+            max(
+                self._min_timeout,
+                self._fast_grading_timeout
+                + self._grading_timeout_step_seconds
+                + growth_steps * self._grading_timeout_step_seconds,
+            ),
+        )
+        full_timeout = estimated_full_timeout
+        if self._grading_full_timeout_floor > 0:
+            full_timeout = min(
+                self._timeout,
+                max(estimated_full_timeout, self._grading_full_timeout_floor),
+            )
+        fast_timeout = min(
+            full_timeout,
+            max(
+                min(self._min_timeout, self._fast_grading_timeout),
+                self._fast_grading_timeout + growth_steps * (self._grading_timeout_step_seconds // 2),
+            ),
+        )
+        fast_excerpt_chars = min(
+            max(self._grading_fast_excerpt_chars, 1600),
+            max(self._grading_fast_excerpt_chars, content_length),
+        )
+        full_excerpt_chars = min(
+            max(self._grading_full_excerpt_chars, fast_excerpt_chars),
+            max(self._grading_full_excerpt_chars, content_length),
+        )
+        fast_max_tokens = min(1200, 850 + growth_steps * 80)
+        full_max_tokens = min(1600, 1000 + growth_steps * 120)
+        return {
+            "content_length": content_length,
+            "estimated_full_timeout": int(estimated_full_timeout),
+            "fast_timeout": int(fast_timeout),
+            "full_timeout": int(full_timeout),
+            "fast_excerpt_chars": int(fast_excerpt_chars),
+            "full_excerpt_chars": int(full_excerpt_chars),
+            "fast_max_tokens": int(fast_max_tokens),
+            "full_max_tokens": int(full_max_tokens),
+        }
+
+    def _request_grading_json(
+        self,
+        *,
+        submission_id: str,
+        primary_model: str,
+        primary_prompt: str,
+        primary_timeout: int,
+        fallback_model: str,
+        fallback_prompt: str,
+        fallback_timeout: int,
+        fast_max_tokens: int,
+        full_max_tokens: int,
+    ) -> str:
+        attempts = [("fast", primary_model, primary_prompt, primary_timeout)]
+        if fallback_model != primary_model or fallback_prompt != primary_prompt:
+            attempts.append(("full", fallback_model, fallback_prompt, fallback_timeout))
+
+        last_error = None
+        for stage, model_name, prompt_text, timeout_seconds in attempts:
+            try:
+                logger.info(
+                    "Calling %s model=%s for submission=%s stage=%s timeout=%ss",
+                    self._provider,
+                    model_name,
+                    submission_id,
+                    stage,
+                    timeout_seconds,
+                )
+                response = self.client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是一名课程助教。"
+                                "只返回 JSON，不要输出 markdown 或额外说明。"
+                                "除维度键名外，所有文字字段必须使用简体中文。"
+                                "请优先给出准确、简洁、可解析的结果。"
+                            ),
+                        },
+                        {"role": "user", "content": prompt_text},
+                    ],
+                    temperature=0.1 if stage == "fast" else 0.2,
+                    max_tokens=fast_max_tokens if stage == "fast" else full_max_tokens,
+                    timeout=timeout_seconds,
+                )
+                msg = response.choices[0].message
+                raw = (msg.content or "").strip()
+                if not raw:
+                    raw = (getattr(msg, "reasoning_content", None) or "").strip()
+                logger.info(
+                    "AI grading raw response for submission=%s stage=%s: %s",
+                    submission_id,
+                    stage,
+                    raw[:2000],
+                )
+                logger.debug("LLM raw response: %s", raw[:200])
+                if raw:
+                    return raw
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "AI grading stage=%s failed for submission=%s: %s",
+                    stage,
+                    submission_id,
+                    e,
+                )
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("AI grading returned empty response.")
 
     def _write_grading_json(
         self,
@@ -557,6 +817,11 @@ Return JSON only:
             "dimension_scores": result.dimension_scores,
             "feedback": result.feedback,
             "confidence": result.confidence,
+            "confidence_label": result.confidence_label,
+            "gain_points": result.gain_points,
+            "deductions": result.deductions,
+            "regrade_diff": result.regrade_diff,
+            "grading_context": result.grading_context,
             "rubric": [
                 {
                     "name": dimension.name,
@@ -588,7 +853,7 @@ Return JSON only:
         for item in raw_dimensions:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name", "")).strip()
+            name = localize_dimension_name(str(item.get("name", "")).strip())
             if not name:
                 continue
             focus = item.get("grading_focus") or []
@@ -598,9 +863,13 @@ Return JSON only:
                 {
                     "name": name,
                     "weight": self._coerce_weight(item.get("weight", 0.0)),
-                    "description": str(item.get("description", "")).strip(),
+                    "description": localize_user_text(str(item.get("description", "")).strip()),
                     "max_score": self._coerce_score(item.get("max_score", 100.0), default=100.0),
-                    "grading_focus": [str(entry).strip() for entry in focus if str(entry).strip()],
+                    "grading_focus": [
+                        localize_user_text(str(entry).strip())
+                        for entry in focus
+                        if str(entry).strip()
+                    ],
                 }
             )
 
@@ -623,12 +892,14 @@ Return JSON only:
                     running += normalized
 
         return {
-            "title": str(payload.get("title", "")).strip() or f"{fallback_title}评分标准",
-            "summary": str(payload.get("summary", "")).strip(),
-            "teacher_message": str(payload.get("teacher_message", "")).strip(),
+            "title": localize_user_text(
+                str(payload.get("title", "")).strip() or f"{fallback_title}评分标准"
+            ),
+            "summary": localize_user_text(str(payload.get("summary", "")).strip()),
+            "teacher_message": localize_user_text(str(payload.get("teacher_message", "")).strip()),
             "dimensions": normalized_dimensions,
             "hard_rules": [
-                str(rule).strip()
+                localize_user_text(str(rule).strip())
                 for rule in payload.get("hard_rules", [])
                 if str(rule).strip()
             ],
@@ -793,11 +1064,13 @@ Return JSON only:
                 submission_id=submission.id,
                 dimension_scores=dim_scores,
                 total_score=0.0,
-                feedback=(
-                    "No readable homework content was found, so the submission "
-                    "could not be graded automatically."
-                ),
+                feedback="未找到可读的作业内容，系统暂时无法自动批改。",
                 confidence=0.1,
+                confidence_label="low",
+                grading_context="",
+                gain_points={dimension.name: [] for dimension in rubric.dimensions},
+                deductions={dimension.name: [] for dimension in rubric.dimensions},
+                regrade_diff={},
                 graded_by="rule",
                 graded_at=datetime.now(),
                 appeal_count=existing_result.appeal_count if existing_result else 0,
@@ -808,7 +1081,37 @@ Return JSON only:
         cleaned_text = re.sub(r"\s+", "", text)
         text_length = len(cleaned_text)
         line_count = len([line for line in text.splitlines() if line.strip()])
-        sentence_hits = len(re.findall(r"[???!?.;?]", text))
+        sentence_hits = len(re.findall(r"[。！？.!?；;]", text))
+        content_keywords = (
+            "定义",
+            "概念",
+            "理论",
+            "模型",
+            "方法",
+            "结论",
+            "definition",
+            "concept",
+            "theory",
+            "model",
+            "method",
+            "conclusion",
+        )
+        logic_keywords = (
+            "首先",
+            "其次",
+            "然后",
+            "最后",
+            "因为",
+            "因此",
+            "综上",
+            "first",
+            "second",
+            "then",
+            "because",
+            "therefore",
+            "finally",
+            "in conclusion",
+        )
 
         for d in rubric.dimensions:
             score = 35.0
@@ -836,22 +1139,25 @@ Return JSON only:
                 score += 3
 
             name_lower = d.name.lower()
-            if any(keyword in name_lower for keyword in ("content", "accuracy")):
-                if any(kw in text for kw in ["??", "??", "??", "??", "??", "??"]):
+            if any(keyword in name_lower for keyword in ("content", "accuracy", "内容", "准确")):
+                if any(kw in text for kw in content_keywords):
                     score += 12
-            if "logic" in name_lower:
-                if any(kw in text for kw in ["??", "??", "??", "??", "??", "??", "??"]):
+            if any(keyword in name_lower for keyword in ("logic", "论证", "逻辑")):
+                if any(kw in text for kw in logic_keywords):
                     score += 12
-            if any(keyword in name_lower for keyword in ("expression", "language")):
+            if any(
+                keyword in name_lower
+                for keyword in ("expression", "language", "表达", "规范", "语言")
+            ):
                 if text_length >= 100:
                     score += 10
 
             score = min(score, 100)
             dim_scores[d.name] = round(score, 1)
-            feedback_parts.append(f"{d.name}: {score}")
+            feedback_parts.append(f"{d.name}：{score:.1f}分")
 
         total = self._calc_weighted_score(dim_scores, rubric)
-        feedback = "; ".join(feedback_parts) + " (rule-based fallback)"
+        feedback = "；".join(feedback_parts) + "（规则回退）"
 
         return GradingResult(
             submission_id=submission.id,
@@ -859,6 +1165,17 @@ Return JSON only:
             total_score=round(total, 1),
             feedback=feedback,
             confidence=0.5,
+            confidence_label="medium",
+            grading_context=self._build_grading_context(
+                "",
+                rubric,
+                submission,
+                appeal_reason="",
+                reference_block="规则回退，未使用大模型参考。",
+            ),
+            gain_points={dimension.name: [] for dimension in rubric.dimensions},
+            deductions={dimension.name: [] for dimension in rubric.dimensions},
+            regrade_diff={},
             graded_by="rule",
             graded_at=datetime.now(),
             appeal_count=existing_result.appeal_count if existing_result else 0,
@@ -874,9 +1191,9 @@ Return JSON only:
             "[PDF parser unavailable",
             "[DOCX parser unavailable",
             "[Unable to decode file:",
-            "[PDF?????",
-            "[DOCX?????",
-            "[??????:",
+            "[PDF解析不可用",
+            "[DOCX解析不可用",
+            "[无法解码文件:",
         )
         if any(normalized.startswith(marker) for marker in unreadable_markers):
             return False
@@ -889,18 +1206,12 @@ Return JSON only:
         rubric: Rubric,
         submission: HomeworkSubmission,
     ) -> GradingResult:
-        deductions = []
-        for rule in rubric.hard_rules:
-            match = re.search(r"(\d+)", rule)
-            if match:
-                pts = int(match.group(1))
-                result.total_score -= pts
-                deductions.append(f"Hard deduction: {rule} (-{pts})")
-
-        if deductions:
-            result.feedback += "\n" + "\n".join(deductions)
-
-        result.total_score = max(0, round(result.total_score, 1))
+        # Hard rules are advisory rubric constraints. They must be incorporated
+        # during dimension scoring, not blindly subtracted from the final score.
+        # The previous implementation deducted any number mentioned in the rule
+        # text unconditionally, which could wrongly reduce the total score even
+        # when the rule was not triggered.
+        result.total_score = max(0, round(self._calc_weighted_score(result.dimension_scores, rubric), 1))
         return result
 
     def _calc_weighted_score(self, dim_scores: Dict[str, float], rubric: Rubric) -> float:
@@ -909,24 +1220,91 @@ Return JSON only:
             total += dim_scores.get(d.name, 0) * d.weight
         return round(total, 1)
 
+    def _looks_like_weighted_dimension_scores(
+        self,
+        dim_scores: Dict[str, float],
+        rubric: Rubric,
+    ) -> bool:
+        if not dim_scores or not rubric.dimensions:
+            return False
+
+        present_scores = [dim_scores.get(d.name) for d in rubric.dimensions if d.name in dim_scores]
+        if len(present_scores) != len(rubric.dimensions):
+            return False
+
+        weighted_caps = [round(d.weight * 100, 4) for d in rubric.dimensions]
+        if not any(cap < 99.9 for cap in weighted_caps):
+            return False
+
+        total_score = sum(float(score) for score in present_scores)
+        if not (70.0 <= total_score <= 110.0):
+            return False
+
+        within_weighted_cap = 0
+        for dimension in rubric.dimensions:
+            score = float(dim_scores.get(dimension.name, 0.0))
+            weighted_cap = dimension.weight * 100
+            if score <= weighted_cap + 3.0:
+                within_weighted_cap += 1
+
+        return within_weighted_cap >= max(2, len(rubric.dimensions) - 1)
+
+    def _expand_weighted_dimension_scores(
+        self,
+        dim_scores: Dict[str, float],
+        rubric: Rubric,
+    ) -> Dict[str, float]:
+        expanded: Dict[str, float] = {}
+        for dimension in rubric.dimensions:
+            weighted_score = float(dim_scores.get(dimension.name, 0.0))
+            if dimension.weight <= 0:
+                expanded[dimension.name] = round(weighted_score, 1)
+                continue
+            expanded_score = weighted_score / dimension.weight
+            expanded[dimension.name] = round(min(100.0, max(0.0, expanded_score)), 1)
+        return expanded
+
     def _extract_json_payload(self, raw: str) -> Optional[Dict[str, Any]]:
         cleaned = raw.strip()
         fenced_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned, re.IGNORECASE)
         if fenced_match:
             cleaned = fenced_match.group(1).strip()
 
-        candidates = [cleaned]
-        match = re.search(r"\{[\s\S]*\}", cleaned)
-        if match:
-            candidates.append(match.group())
-
-        for candidate in candidates:
+        # 1) Try direct parse
+        for candidate in [cleaned]:
             try:
                 parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
             except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
+                pass
+
+        # 2) Use raw_decode to find the first valid JSON object,
+        #    skipping any leading text/thinking content from the model.
+        decoder = json.JSONDecoder()
+        idx = 0
+        while idx < len(cleaned):
+            brace_pos = cleaned.find("{", idx)
+            if brace_pos == -1:
+                break
+            try:
+                parsed, _ = decoder.raw_decode(cleaned, brace_pos)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+            idx = brace_pos + 1
+
+        # 3) Greedy fallback
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
         return None
 
     def _extract_scores_from_text(self, raw: str, rubric: Rubric) -> Dict[str, float]:
@@ -951,8 +1329,11 @@ Return JSON only:
     def _normalize_dimension_scores(self, raw_scores: Any, rubric: Rubric) -> Dict[str, float]:
         normalized_scores: Dict[str, float] = {}
         if isinstance(raw_scores, dict):
+            name_mapping = self._build_dimension_name_mapping(raw_scores, rubric)
             for raw_name, raw_value in raw_scores.items():
-                matched_name = self._match_dimension_name(str(raw_name), rubric)
+                matched_name = name_mapping.get(str(raw_name)) or self._match_dimension_name(
+                    str(raw_name), rubric
+                )
                 score = self._coerce_score(raw_value, default=70.0)
                 if matched_name:
                     normalized_scores[matched_name] = score
@@ -960,7 +1341,45 @@ Return JSON only:
         for dimension in rubric.dimensions:
             normalized_scores.setdefault(dimension.name, 70.0)
 
+        if self._looks_like_weighted_dimension_scores(normalized_scores, rubric):
+            logger.warning(
+                "AI returned weighted dimension scores instead of 100-point raw scores; "
+                "auto-expanding before total-score calculation."
+            )
+            normalized_scores = self._expand_weighted_dimension_scores(normalized_scores, rubric)
+
         return normalized_scores
+
+    def _build_dimension_name_mapping(
+        self,
+        raw_mapping: Any,
+        rubric: Rubric,
+    ) -> Dict[str, str]:
+        if not isinstance(raw_mapping, dict):
+            return {}
+
+        mapping: Dict[str, str] = {}
+        matched_targets = set()
+        raw_items = list(raw_mapping.items())
+
+        for raw_name, _ in raw_items:
+            matched_name = self._match_dimension_name(str(raw_name), rubric)
+            if matched_name and matched_name not in matched_targets:
+                mapping[str(raw_name)] = matched_name
+                matched_targets.add(matched_name)
+
+        remaining_raw_names = [str(raw_name) for raw_name, _ in raw_items if str(raw_name) not in mapping]
+        remaining_dimensions = [
+            dimension.name for dimension in rubric.dimensions if dimension.name not in matched_targets
+        ]
+
+        # If the model rewrote dimension names but preserved order, align the
+        # remaining keys to the remaining rubric dimensions by position.
+        if remaining_raw_names and len(remaining_raw_names) == len(remaining_dimensions):
+            for raw_name, dimension_name in zip(remaining_raw_names, remaining_dimensions):
+                mapping[raw_name] = dimension_name
+
+        return mapping
 
     def _match_dimension_name(self, raw_name: str, rubric: Rubric) -> Optional[str]:
         normalized_raw = self._normalize_dimension_name(raw_name)
@@ -1000,6 +1419,63 @@ Return JSON only:
             return default
         return round(min(max(confidence, 0.0), 1.0), 3)
 
+    def _coerce_confidence_label(self, value: Any, confidence: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"high", "medium", "low"}:
+            return normalized
+
+        score = self._coerce_confidence(confidence, default=0.7)
+        if score >= 0.8:
+            return "high"
+        if score >= 0.5:
+            return "medium"
+        return "low"
+
+    def _localize_gain_points(self, gain_points: Dict[str, List[str]]) -> Dict[str, List[str]]:
+        localized: Dict[str, List[str]] = {}
+        for dim_name, items in (gain_points or {}).items():
+            localized[dim_name] = [
+                localize_user_text(str(item).strip())
+                for item in items
+                if str(item).strip()
+            ]
+        return localized
+
+    def _localize_deductions(
+        self,
+        deductions: Dict[str, List[Dict[str, Any]]],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        localized: Dict[str, List[Dict[str, Any]]] = {}
+        for dim_name, items in (deductions or {}).items():
+            localized_items: List[Dict[str, Any]] = []
+            for item in items:
+                localized_items.append(
+                    {
+                        **item,
+                        "point": localize_user_text(str(item.get("point", "")).strip()),
+                        "evidence": localize_user_text(str(item.get("evidence", "")).strip()),
+                        "evidence_source": localize_user_text(
+                            str(item.get("evidence_source", "")).strip()
+                        ),
+                    }
+                )
+            localized[dim_name] = localized_items
+        return localized
+
+    def _localize_regrade_diff(
+        self,
+        diff: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        localized: Dict[str, Dict[str, Any]] = {}
+        for dim_name, item in (diff or {}).items():
+            if not isinstance(item, dict):
+                continue
+            localized[dim_name] = {
+                **item,
+                "reason": localize_user_text(str(item.get("reason", "")).strip()),
+            }
+        return localized
+
     def _coerce_weight(self, value: Any, default: float = 0.0) -> float:
         try:
             weight = float(value)
@@ -1008,6 +1484,146 @@ Return JSON only:
         if weight > 1.0:
             weight /= 100.0
         return round(min(max(weight, 0.0), 1.0), 4)
+
+    @staticmethod
+    def _format_dim_keys_example(rubric: "Rubric", example_value: str) -> str:
+        """Generate JSON keys using actual rubric dimension names for the prompt template."""
+        return ",\n    ".join(f'"{d.name}": {example_value}' for d in rubric.dimensions)
+
+    def _normalize_gain_points(self, raw_gain_points: Any, rubric: Rubric) -> Dict[str, List[str]]:
+        normalized: Dict[str, List[str]] = {}
+        if isinstance(raw_gain_points, dict):
+            name_mapping = self._build_dimension_name_mapping(raw_gain_points, rubric)
+            for raw_name, raw_items in raw_gain_points.items():
+                matched_name = name_mapping.get(str(raw_name)) or self._match_dimension_name(
+                    str(raw_name), rubric
+                )
+                if not matched_name:
+                    continue
+                items = raw_items if isinstance(raw_items, list) else [raw_items]
+                normalized[matched_name] = [
+                    str(item).strip() for item in items if str(item).strip()
+                ]
+
+        for dimension in rubric.dimensions:
+            normalized.setdefault(dimension.name, [])
+        return normalized
+
+    def _normalize_deductions(self, raw_deductions: Any, rubric: Rubric) -> Dict[str, List[Dict[str, Any]]]:
+        normalized: Dict[str, List[Dict[str, Any]]] = {}
+        if isinstance(raw_deductions, dict):
+            name_mapping = self._build_dimension_name_mapping(raw_deductions, rubric)
+            for raw_name, raw_items in raw_deductions.items():
+                matched_name = name_mapping.get(str(raw_name)) or self._match_dimension_name(
+                    str(raw_name), rubric
+                )
+                if not matched_name:
+                    continue
+                items = raw_items if isinstance(raw_items, list) else [raw_items]
+                cleaned_items: List[Dict[str, Any]] = []
+                for item in items:
+                    if isinstance(item, dict):
+                        cleaned_items.append(
+                            {
+                                "point": str(item.get("point", "")).strip(),
+                                "deduct": self._coerce_score(item.get("deduct", 0.0), default=0.0),
+                                "evidence": str(item.get("evidence", "")).strip(),
+                                "evidence_source": str(item.get("evidence_source", "")).strip(),
+                            }
+                        )
+                    elif str(item).strip():
+                        cleaned_items.append(
+                            {
+                                "point": str(item).strip(),
+                                "deduct": 0.0,
+                                "evidence": "",
+                                "evidence_source": "",
+                            }
+                        )
+                normalized[matched_name] = cleaned_items
+
+        for dimension in rubric.dimensions:
+            normalized.setdefault(dimension.name, [])
+        return normalized
+
+    def _normalize_regrade_diff(
+        self,
+        raw_diff: Any,
+        existing_result: Optional[GradingResult],
+        new_scores: Dict[str, float],
+        rubric: Rubric,
+    ) -> Dict[str, Dict[str, Any]]:
+        normalized: Dict[str, Dict[str, Any]] = {}
+        previous_scores = existing_result.dimension_scores if existing_result else {}
+
+        if isinstance(raw_diff, dict):
+            name_mapping = self._build_dimension_name_mapping(raw_diff, rubric)
+            for raw_name, raw_item in raw_diff.items():
+                matched_name = name_mapping.get(str(raw_name)) or self._match_dimension_name(
+                    str(raw_name), rubric
+                )
+                if not matched_name or not isinstance(raw_item, dict):
+                    continue
+                normalized[matched_name] = {
+                    "old": self._coerce_score(raw_item.get("old", previous_scores.get(matched_name, 0.0)), default=0.0),
+                    "new": self._coerce_score(raw_item.get("new", new_scores.get(matched_name, 0.0)), default=0.0),
+                    "reason": str(raw_item.get("reason", "")).strip(),
+                }
+
+        if existing_result:
+            for dimension in rubric.dimensions:
+                old_score = previous_scores.get(dimension.name, 0.0)
+                new_score = new_scores.get(dimension.name, 0.0)
+                if dimension.name not in normalized and round(old_score, 1) != round(new_score, 1):
+                    normalized[dimension.name] = {
+                        "old": old_score,
+                        "new": new_score,
+                        "reason": "Score changed during appeal regrade.",
+                    }
+        return normalized
+
+    def _build_grading_context(
+        self,
+        assignment_title: str,
+        rubric: Rubric,
+        submission: HomeworkSubmission,
+        *,
+        appeal_reason: str,
+        reference_block: str,
+    ) -> str:
+        rubric_lines = [
+            f"{dimension.name} ({dimension.weight:.0%}): {dimension.description}"
+            for dimension in rubric.dimensions
+        ]
+        parts = [
+            f"Assignment: {assignment_title or '(not specified)'}",
+            "Rubric:",
+            "\n".join(rubric_lines),
+            "Student Submission:",
+            submission.content[:3000],
+        ]
+        if reference_block:
+            parts.extend(["Evidence and Context:", reference_block[:2000]])
+        if appeal_reason:
+            parts.extend(["Appeal Reason:", appeal_reason[:1000]])
+        return "\n\n".join(part for part in parts if part)
+
+    def _build_submission_reference_block(
+        self,
+        submission: HomeworkSubmission,
+        rubric: Rubric,
+        assignment_title: str,
+    ) -> str:
+        lines = [
+            f"Course ID: {getattr(submission, 'course_id', 'default') or 'default'}",
+            f"Assignment Title: {assignment_title or '(not specified)'}",
+            f"Submission ID: {submission.id}",
+        ]
+        for dimension in rubric.dimensions:
+            lines.append(
+                f"Rubric Dimension: {dimension.name} | Weight: {dimension.weight:.0%} | Description: {dimension.description}"
+            )
+        return "\n".join(lines)
 
     def batch_grade(
         self,

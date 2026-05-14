@@ -935,6 +935,80 @@ class TAChannelManager:
 
     # ── 通知辅助 ────────────────────────────
 
+    def format_appeal_push(self, appeal: Appeal,
+                           submission: Optional[HomeworkSubmission] = None) -> str:
+        """Format appeal details with AI regrade summary for TA review."""
+        original_score = submission.score if submission and submission.score is not None else None
+        current_feedback = (submission.feedback or "无")[:100] if submission else "无"
+
+        lines = [
+            "【新的申诉请求】",
+            f"申诉ID: {appeal.id}",
+            f"学生ID: {appeal.student_id}",
+            f"提交ID: {appeal.submission_id}",
+            f"申诉原因: {appeal.reason}",
+        ]
+
+        if original_score is not None and appeal.new_score is not None:
+            score_diff = round(appeal.new_score - original_score, 1)
+            lines.append(
+                f"原分: {original_score:.1f} -> AI重评: {appeal.new_score:.1f} ({score_diff:+.1f})"
+            )
+        elif original_score is not None:
+            lines.append(f"原分: {original_score:.1f}")
+
+        if submission:
+            lines.append(f"当前反馈: {current_feedback}")
+
+        if appeal.ai_confidence_label:
+            conf_text = appeal.ai_confidence_label
+            if appeal.ai_confidence is not None:
+                conf_text += f" ({appeal.ai_confidence:.2f})"
+            lines.append(f"AI重评置信度: {conf_text}")
+
+        if appeal.ai_feedback:
+            lines.append(f"AI重评结论: {appeal.ai_feedback[:180]}")
+
+        diff_lines = self._format_regrade_diff_lines(appeal.regrade_result)
+        if diff_lines:
+            lines.append("分项变更:")
+            lines.extend([f"  - {item}" for item in diff_lines])
+
+        lines.extend([
+            "",
+            "快捷回复:",
+            "  “同意申诉”或“1” -> 批准并采用 AI 重评结果",
+            "  “驳回申诉”或“2” -> 维持原评分",
+            "",
+            "工作台指令:",
+            "  /待审列表 -> 查看所有待审申诉",
+            f"  /同意 {appeal.id} [备注] -> 批准指定申诉",
+            f"  /驳回 {appeal.id} [备注] -> 驳回指定申诉",
+        ])
+
+        return "\n".join(lines)
+
+    def _format_regrade_diff_lines(self, regrade_result: Dict) -> List[str]:
+        if not isinstance(regrade_result, dict):
+            return []
+
+        raw_diff = regrade_result.get("regrade_diff") or {}
+        if not isinstance(raw_diff, dict):
+            return []
+
+        lines: List[str] = []
+        for dim_name, item in raw_diff.items():
+            if not isinstance(item, dict):
+                continue
+            old_score = item.get("old")
+            new_score = item.get("new")
+            reason = str(item.get("reason", "")).strip()
+            line = f"{dim_name}: {old_score} -> {new_score}"
+            if reason:
+                line += f"；{reason}"
+            lines.append(line)
+        return lines
+
     def send_notification(
         self,
         target_id: str,

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from runtime.encoding import read_text_file
+
 
 class FileParser:
     """Parse supported files into plain text."""
@@ -55,14 +57,10 @@ class FileParser:
             return f"[DOCX parser unavailable for {file_path}; install python-docx]"
 
     def _parse_text(self, file_path: str) -> str:
-        encodings = ["utf-8", "gbk", "gb2312", "latin-1"]
-        for encoding in encodings:
-            try:
-                with open(file_path, "r", encoding=encoding) as f:
-                    return f.read()
-            except (UnicodeDecodeError, UnicodeError):
-                continue
-        return f"[Unable to decode file: {file_path}]"
+        try:
+            return read_text_file(file_path)
+        except OSError:
+            return f"[Unable to decode file: {file_path}]"
 
     def detect_title(self, file_path: str, content: str) -> str:
         name = Path(file_path).stem

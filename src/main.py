@@ -21,6 +21,10 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from runtime.encoding import configure_utf8_stdio
+
+configure_utf8_stdio()
+
 _env_path = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     ".env",
@@ -80,6 +84,7 @@ class QQCourseAssistant:
         )
         self._recent_message_keys = {}
         self._message_dedupe_ttl_seconds = 15.0
+        self._recent_assignment_ops = {}  # key -> timestamp, dedup for assignment creation
         self._stop_event = asyncio.Event()
         self.qclaw.on_message(self._handle_message)
 
@@ -306,6 +311,21 @@ class QQCourseAssistant:
         )
 
     async def _handle_set_assignment(self, msg: QQMessage, intent):
+        # Dedup: botpy may deliver the same message multiple times; skip if we
+        # already processed this exact assignment request recently.
+        import time
+        content_norm = re.sub(r"\s+", " ", (msg.content or "").strip())
+        op_key = f"{msg.user_id}:{content_norm}"
+        now = time.time()
+        if op_key in self._recent_assignment_ops and now - self._recent_assignment_ops[op_key] < 120:
+            logger.info("Skip duplicate _handle_set_assignment: key=%s", op_key[:80])
+            return
+        self._recent_assignment_ops[op_key] = now
+        # Prune old entries
+        self._recent_assignment_ops = {
+            k: v for k, v in self._recent_assignment_ops.items() if now - v < 120
+        }
+
         course_id = self._resolve_course_id(msg)
         assignment_title = self._extract_assignment_title(msg.content)
         assignment_requirement = self._extract_assignment_requirement(msg.content, assignment_title)
@@ -356,12 +376,29 @@ class QQCourseAssistant:
         )
 
     async def _handle_rubric_approval(self, msg: QQMessage, intent, course_id: str):
+        # Dedup: if this message was already processed by _handle_set_assignment,
+        # skip it to avoid generating a second (fallback) draft.
+        import time
+        content_norm = re.sub(r"\s+", " ", (msg.content or "").strip())
+        op_key = f"{msg.user_id}:{content_norm}"
+        now = time.time()
+        if op_key in self._recent_assignment_ops and now - self._recent_assignment_ops[op_key] < 120:
+            logger.info("Skip duplicate _handle_rubric_approval (already in set_assignment): key=%s", op_key[:80])
+            return
+
         slots = intent.slots or {}
         draft = slots.get("rubric_draft")
         assignment_title = slots.get("assignment_title") or "新作业"
         assignment_requirement = slots.get("assignment_requirement") or assignment_title
         session_id = intent.session_id or self._build_session_id(msg)
         teacher_reply = (slots.get("teacher_reply") or msg.content or "").strip()
+
+        if self._looks_like_assignment_command(teacher_reply):
+            logger.info(
+                "Assignment command received during rubric approval; rerouting to set_assignment"
+            )
+            await self._handle_set_assignment(msg, intent)
+            return
 
         if not draft:
             self.router.set_waiting(session_id, msg.user_id, None, intent=None, slots={})
@@ -488,6 +525,11 @@ class QQCourseAssistant:
             return "新作业"
         first_line = text.splitlines()[0].strip()
         return first_line[:80] or "新作业"
+
+    def _looks_like_assignment_command(self, text: str) -> bool:
+        normalized = (text or "").strip()
+        prefixes = ("布置作业", "发布作业", "设置作业", "新建作业")
+        return any(normalized.startswith(prefix) for prefix in prefixes)
 
     def _extract_assignment_requirement(self, content: str, assignment_title: str) -> str:
         text = (content or "").strip()
@@ -628,6 +670,15 @@ class QQCourseAssistant:
             if rubric:
                 result = self.grading.grade(submission, rubric, assignment.title)
                 await self.notifier.notify_student(submission, result, rubric)
+                await self._send_student_report_after_grading(
+                    submission=submission,
+                    assignment=assignment,
+                )
+            else:
+                logger.warning(
+                    "No rubric found for assignment=%s course=%s, skipping grading",
+                    assignment.id, course_id,
+                )
         except ValueError as e:
             await self.qclaw.send_message(
                 msg.user_id,
@@ -696,7 +747,10 @@ class QQCourseAssistant:
                 await self.ta_channel.push_appeal_to_ta_channel(appeal, submission)
                 await self.qclaw.send_message(
                     msg.user_id,
-                    f"申诉已提交，等待 TA/教师处理。\n申诉ID: {appeal.id}",
+                    (
+                        f"申诉已提交，AI 已完成重评并进入 TA/教师审核。\n"
+                        f"申诉ID: {appeal.id}"
+                    ),
                 )
                 return
 
@@ -851,6 +905,45 @@ class QQCourseAssistant:
             await self.qclaw.send_message(student_id, message)
         except Exception as e:
             logger.warning("Failed to notify student=%s: %s", student_id, e)
+
+    async def _send_student_report_after_grading(
+        self,
+        *,
+        submission,
+        assignment,
+    ) -> None:
+        try:
+            self.report_gen.invalidate(assignment.id)
+            config = ReportConfig(
+                assignment_id=assignment.id,
+                report_type=ReportType.STUDENT_DETAIL,
+                student_id=submission.student_id,
+                include_radar=True,
+                include_evidence=True,
+                include_ranking=True,
+            )
+            path = self.report_gen.generate_with_config(config, force=True)
+        except Exception as e:
+            logger.warning(
+                "Auto student report generation failed for submission=%s assignment=%s: %s",
+                submission.id,
+                assignment.id,
+                e,
+                exc_info=True,
+            )
+            await self.qclaw.send_message(
+                submission.student_id,
+                "批改已完成，但个人报告暂时生成失败。你可以稍后回复“我的报告”重试。",
+            )
+            return
+
+        await self.qclaw.send_message(
+            submission.student_id,
+            (
+                f"个人报告已生成: {Path(path).name}\n"
+                f"路径: {path}"
+            ),
+        )
 
     async def _prepare_courseware_file(self, file_ref: str, file_name: str | None) -> str:
         uploads_dir = Path("data") / "uploads" / "courseware"
